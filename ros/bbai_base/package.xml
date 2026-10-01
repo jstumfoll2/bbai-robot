@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>bbai_base</name>
+  <version>0.1.0</version>
+  <description>Wheel odometry, IMU and lidar bringup for the BeagleBone AI robot</description>
+  <maintainer email="j.stumfoll@gmail.com">Jason</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>catkin</buildtool_depend>
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>rplidar_ros</exec_depend>
+</package>

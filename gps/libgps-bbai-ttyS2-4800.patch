@@ -1,0 +1,26 @@
+diff --git a/src/serial.c b/src/serial.c
+index 85419c8..4f7c420 100644
+--- a/src/serial.c
++++ b/src/serial.c
+@@ -24,7 +24,7 @@ void serial_config(void)
+ {
+     struct termios options;
+     tcgetattr(uart0_filestream, &options);
+-    options.c_cflag = B9600 | CS8 | CLOCAL | CREAD;
++    options.c_cflag = B4800 | CS8 | CLOCAL | CREAD;
+     options.c_iflag = IGNPAR;
+     options.c_oflag = 0;
+     options.c_lflag = 0;
+diff --git a/src/serial.h b/src/serial.h
+index 8d46e1c..d7721c8 100644
+--- a/src/serial.h
++++ b/src/serial.h
+@@ -4,7 +4,7 @@
+ #include <inttypes.h>
+ 
+ #ifndef PORTNAME
+-#define PORTNAME "/dev/ttyAMA0"
++#define PORTNAME "/dev/ttyS2"
+ #endif
+ 
+ void serial_init(void);

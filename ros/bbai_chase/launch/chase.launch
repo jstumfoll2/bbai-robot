@@ -1,0 +1,22 @@
+<!-- Chase the dog: hold R2 on the PS4 controller to arm, release to stop; L1 (teleop) always overrides.
+     Start robot.launch (bbai_base) and teleop.launch (bbai_teleop) first.
+     dry_run:=true (default) only publishes /chase/cmd_vel_preview; pass dry_run:=false to drive.
+     targets:="[dog, person]" lets you test it by walking in front of the camera. -->
+<launch>
+  <arg name="dry_run" default="true"/>
+  <arg name="targets" default="[dog]"/>
+  <node pkg="bbai_chase" type="chase_node.py" name="chase" output="screen">
+    <param name="dry_run" value="$(arg dry_run)"/>
+    <rosparam param="targets" subst_value="true">$(arg targets)</rosparam>
+    <param name="button_chase" value="7"/>          <!-- R2 -->
+    <param name="button_teleop" value="4"/>         <!-- L1, teleop deadman -->
+    <param name="follow_distance" value="0.9"/>
+    <param name="stop_distance" value="0.5"/>
+    <param name="max_linear" value="0.2"/>          <!-- m/s, deliberately slow for first tests -->
+    <param name="k_linear" value="0.4"/>
+    <param name="max_angular" value="2.0"/>         <!-- rad/s -->
+    <param name="k_angular" value="2.5"/>
+    <param name="bearing_deadband_deg" value="5.0"/>
+    <param name="lost_timeout" value="0.5"/>
+  </node>
+</launch>

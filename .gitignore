@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+build/
+devel/
+install/
+logs/
+*.log
+*.dtb
+*.dtbo
+*.out
+*.blob
+*.pgm
+*.bag
+.vscode/

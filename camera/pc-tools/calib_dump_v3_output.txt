@@ -1,0 +1,155 @@
+2026-10-01T14:24:27.645416  depthai 3.10.0
+MxID: 19443010213DF71200
+Is EEPROM available: True
+User calibration: {
+  "batchName": "",
+  "batchTime": 0,
+  "boardConf": "",
+  "boardCustom": "",
+  "boardName": "",
+  "boardOptions": 0,
+  "boardRev": "",
+  "cameraData": [],
+  "deviceName": "",
+  "hardwareConf": "",
+  "housingExtrinsics": {
+    "lengthUnit": 1,
+    "rotationMatrix": [],
+    "specTranslation": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+    },
+    "toCameraSocket": -1,
+    "toDeviceId": "",
+    "translation": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+    }
+  },
+  "imuCalibrationParams": {
+    "accelerometer": [
+      [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ]
+    ],
+    "gyroscope": [
+      [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ]
+    ],
+    "noise": {
+      "accelerometer": {
+        "x": {
+          "biasStability": 0.06864587217569351,
+          "noiseDensity": 0.05003350228071213,
+          "randomWalk": 3.733806806849316e-05
+        },
+        "y": {
+          "biasStability": 0.1101490706205368,
+          "noiseDensity": 0.05472908914089203,
+          "randomWalk": 5.082023562863469e-05
+        },
+        "z": {
+          "biasStability": 0.04464809596538544,
+          "noiseDensity": 0.06361346691846848,
+          "randomWalk": 2.8452051992644556e-05
+        }
+      },
+      "gyroscope": {
+        "x": {
+          "biasStability": 9.192658424377441,
+          "noiseDensity": 0.2933407127857208,
+          "randomWalk": 0.281106173992157
+        },
+        "y": {
+          "biasStability": 9.681034088134766,
+          "noiseDensity": 0.28518664836883545,
+          "randomWalk": 0.5243510603904724
+        },
+        "z": {
+          "biasStability": 6.934072971343994,
+          "noiseDensity": 0.30118465423583984,
+          "randomWalk": 0.25035563111305237
+        }
+      },
+      "name": "BMI270"
+    }
+  },
+  "imuExtrinsics": {
+    "lengthUnit": 1,
+    "rotationMatrix": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "specTranslation": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+    },
+    "toCameraSocket": -1,
+    "toDeviceId": "",
+    "translation": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+    }
+  },
+  "miscellaneousData": [],
+  "productName": "",
+  "stereoEnableDistortionCorrection": false,
+  "stereoRectificationData": {
+    "leftCameraSocket": -1,
+    "rectifiedRotationLeft": [],
+    "rectifiedRotationRight": [],
+    "rightCameraSocket": -1
+  },
+  "stereoUseSpecTranslation": true,
+  "version": 0,
+  "verticalCameraSocket": -1
+}
+No factory calibration: No or invalid EEPROM configuration flashed, error: EEPROM_INVALID_DATA

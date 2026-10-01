@@ -1,0 +1,24 @@
+<!-- Robot bringup on the BeagleBone AI: lidar, wheel odometry, IMU, static TFs -->
+<launch>
+  <arg name="lidar" default="true"/>
+  <arg name="gps" default="true"/>
+
+  <include if="$(arg lidar)" file="$(find rplidar_ros)/launch/rplidar.launch"/>
+
+  <node pkg="bbai_base" type="base_node.py" name="bbai_base" output="screen" respawn="true" respawn_delay="2">
+    <rosparam file="$(find bbai_base)/config/base.yaml" command="load"/>
+  </node>
+
+  <node if="$(arg gps)" pkg="bbai_base" type="gps_node.py" name="gps" output="screen">
+    <param name="port" value="/dev/ttyS2"/>
+    <param name="baud" value="4800"/>
+  </node>
+
+  <!-- x y z yaw pitch roll; measure and update these offsets -->
+  <node pkg="tf2_ros" type="static_transform_publisher" name="base_to_laser"
+        args="0 0 0.10 0 0 0 base_link laser"/>
+  <node pkg="tf2_ros" type="static_transform_publisher" name="base_to_imu"
+        args="0 0 0.05 0 0 0 base_link imu_link"/>
+  <node pkg="tf2_ros" type="static_transform_publisher" name="base_to_gps"
+        args="0 0 0.08 0 0 0 base_link gps_link"/>
+</launch>

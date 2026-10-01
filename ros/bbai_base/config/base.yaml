@@ -1,0 +1,26 @@
+# Encoder channels on the Robotics Cape (spin tests 2026-10-01):
+#   ch1 = left back, ch2 = right back, ch3 = left front, ch4 (PRU) = right front
+# Each side averages its channels. Signs make forward motion count up
+# (3 ft push test: left side counts up, right side counts down going forward).
+left_encoders: [1, 3]
+right_encoders: [2, 4]
+encoder_signs: {"1": 1, "2": -1, "3": 1, "4": -1}
+# Counts per wheel revolution. An 8-pole DAGU magnet with a quadrature A1230
+# should give 16; the 3 ft push measured ~55 counts per wheel, i.e. 15.0.
+counts_per_rev: 15.0
+# Robot geometry in meters (4-wheel skid steer, axle spacing 0.101 m)
+wheel_radius: 0.0396   # 79.2 mm wheels
+track_width: 0.120     # left-right wheel centers; only used if use_gyro_heading is false
+use_gyro_heading: true
+publish_tf: true
+rate: 30.0
+# Motors on the Robotics Cape (lifted-wheel test 2026-10-01):
+#   M1 = left back, M2 = left front, M3 = right front, M4 = right back; +duty drives forward
+left_motors: [1, 2]
+right_motors: [3, 4]
+motor_signs: {"1": 1, "2": 1, "3": 1, "4": 1}
+# ~0.4 m/s wheel speed at 30% duty with the wheels lifted, so ~1.2 m/s at full duty
+max_wheel_speed: 1.2
+max_duty: 0.6          # caps speed at ~0.7 m/s
+min_duty: 0.12         # wheels don't turn below ~8% duty; any nonzero command starts here
+cmd_timeout: 0.5       # stop motors if /cmd_vel goes quiet this long (s)

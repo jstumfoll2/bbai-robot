@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>bbai_chase</name>
+  <version>0.1.0</version>
+  <description>Chase-the-dog: OAK-D-Lite MobileNet-SSD spatial detection to /cmd_vel, armed by a PS4 button.</description>
+  <maintainer email="j.stumfoll@gmail.com">Jason Stumfoll</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>catkin</buildtool_depend>
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+</package>
