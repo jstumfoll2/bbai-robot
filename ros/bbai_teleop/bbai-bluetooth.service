@@ -1,0 +1,12 @@
+[Unit]
+Description=BeagleBone AI onboard Bluetooth (BCM43455 on UART6)
+After=bluetooth.service network.target
+Wants=bluetooth.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/debian/teleop_ws/src/bbai_teleop/bt-up.sh
+
+[Install]
+WantedBy=multi-user.target

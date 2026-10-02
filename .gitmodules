@@ -1,0 +1,4 @@
+[submodule "librobotcontrol"]
+	path = librobotcontrol
+	url = https://github.com/jstumfoll2/librobotcontrol.git
+	branch = v1.1_AIfixes

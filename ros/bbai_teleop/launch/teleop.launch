@@ -1,0 +1,11 @@
+<!-- PS4 teleop: hold L1 and use the left stick (drive) and right stick (turn); R1 = turbo.
+     bbai_base caps duty at 0.6 (~0.7 m/s); spinning in place needs ~1.5-10 rad/s. -->
+<launch>
+  <node pkg="bbai_teleop" type="ps4_teleop.py" name="ps4_teleop" output="screen" respawn="true">
+    <param name="scale_linear" value="0.3"/>
+    <param name="scale_angular" value="1.5"/>  <!-- slow turns keep SLAM happy (lidar is ~7 Hz) -->
+    <param name="scale_linear_turbo" value="0.7"/>
+    <param name="scale_angular_turbo" value="8.0"/>
+    <param name="rate" value="20.0"/>
+  </node>
+</launch>

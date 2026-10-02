@@ -1,0 +1,6 @@
+ 
+# this uEnv.txt created by configure_robotics_dt
+ 
+uname_r=4.14.108-ti-r136
+dtb=am5729-beagleboneai-roboticscape.dtb
+cmdline=coherent_pool=1M
