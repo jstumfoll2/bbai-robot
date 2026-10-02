@@ -1,7 +1,7 @@
 <!-- Lidar-only SLAM: /scan from the BeagleBone AI, no wheel odometry yet -->
 <launch>
   <node pkg="tf" type="static_transform_publisher" name="base_to_laser"
-        args="0 0 0.10 0 0 0 base_link laser 100"/>
+        args="0 0 0.10 3.14159 0 0 base_link laser 100"/>
   <node pkg="hector_mapping" type="hector_mapping" name="hector_mapping" output="screen">
     <param name="map_frame" value="map"/>
     <param name="base_frame" value="base_link"/>
