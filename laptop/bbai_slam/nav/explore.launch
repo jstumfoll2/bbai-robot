@@ -1,0 +1,29 @@
+<!-- Autonomous mapping: gmapping builds the map, explore_lite picks the nearest
+     unexplored frontier, move_base drives there. Needs robot.launch on the board.
+     Stop it: Ctrl-C (motors stop within 0.5 s once /cmd_vel goes quiet). -->
+<launch>
+  <include file="$(env HOME)/bbai_slam/gmapping_bbai.launch"/>
+
+  <node pkg="move_base" type="move_base" name="move_base" output="screen" respawn="false">
+    <rosparam file="$(env HOME)/bbai_slam/nav/move_base.yaml" command="load"/>
+    <rosparam file="$(env HOME)/bbai_slam/nav/costmap_common.yaml" command="load" ns="global_costmap"/>
+    <rosparam file="$(env HOME)/bbai_slam/nav/costmap_common.yaml" command="load" ns="local_costmap"/>
+    <rosparam file="$(env HOME)/bbai_slam/nav/global_costmap.yaml" command="load"/>
+    <rosparam file="$(env HOME)/bbai_slam/nav/local_costmap.yaml" command="load"/>
+    <rosparam file="$(env HOME)/bbai_slam/nav/dwa.yaml" command="load"/>
+  </node>
+
+  <node pkg="explore_lite" type="explore" name="explore" output="screen">
+    <param name="robot_base_frame" value="base_link"/>
+    <param name="costmap_topic" value="map"/>
+    <param name="costmap_updates_topic" value="map_updates"/>
+    <param name="visualize" value="true"/>
+    <param name="planner_frequency" value="0.33"/>
+    <param name="progress_timeout" value="30.0"/>
+    <param name="potential_scale" value="3.0"/>
+    <param name="orientation_scale" value="0.0"/>
+    <param name="gain_scale" value="1.0"/>
+    <param name="transform_tolerance" value="0.5"/>
+    <param name="min_frontier_size" value="0.4"/>
+  </node>
+</launch>

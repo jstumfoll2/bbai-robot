@@ -1,0 +1,25 @@
+<!-- Fuse wheel odometry, compass/gyro IMU and GPS into /odometry/global.
+     Runs alongside gmapping: this EKF publishes no TF (gmapping owns map->odom),
+     so the GPS-fused estimate is a topic in its own frame, "gps_map". GPS fixes
+     are used whenever the receiver has one; without a fix it coasts on odometry. -->
+<launch>
+  <node pkg="robot_localization" type="ekf_localization_node" name="ekf_gps" clear_params="true">
+    <rosparam command="load" file="$(env HOME)/bbai_slam/gps_ekf.yaml"/>
+    <remap from="odometry/filtered" to="odometry/global"/>
+  </node>
+
+  <node pkg="robot_localization" type="navsat_transform_node" name="navsat_transform" clear_params="true">
+    <param name="frequency" value="10"/>
+    <param name="magnetic_declination_radians" value="0"/>  <!-- declination is applied on the board -->
+    <param name="yaw_offset" value="0"/>                     <!-- board publishes ENU yaw (0 = east) -->
+    <param name="zero_altitude" value="true"/>
+    <param name="publish_filtered_gps" value="true"/>
+    <param name="broadcast_cartesian_transform" value="false"/>
+    <param name="use_odometry_yaw" value="false"/>
+    <param name="wait_for_datum" value="false"/>
+    <param name="delay" value="2.0"/>
+    <remap from="imu/data" to="imu/data"/>
+    <remap from="gps/fix" to="gps/fix"/>
+    <remap from="odometry/filtered" to="odometry/global"/>
+  </node>
+</launch>

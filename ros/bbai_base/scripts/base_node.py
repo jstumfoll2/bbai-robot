@@ -4,6 +4,7 @@
 Subscribes: /cmd_vel (geometry_msgs/Twist), skid steer; motors stop if no
             message arrives within ~cmd_timeout seconds
 Topics:  /odom (nav_msgs/Odometry), /imu/data_raw (sensor_msgs/Imu),
+         /imu/data (sensor_msgs/Imu with compass yaw, when ~mag_heading is true),
          /imu/mag (sensor_msgs/MagneticField), /wheel_ticks (raw counts ch1-4, debug)
 TF:      odom -> base_link (when ~publish_tf is true)
 
@@ -64,12 +65,25 @@ class BaseNode(object):
         self.counts_per_rev = float(p("~counts_per_rev", 16.0))
         self.wheel_radius = float(p("~wheel_radius", 0.0325))
         self.track = float(p("~track_width", 0.13))
+        # Skid steer turns slower than the wheel geometry predicts (wheels scrub),
+        # so /cmd_vel turn rates are mapped to wheel speeds with a wider effective track
+        self.cmd_turn_track = float(p("~cmd_turn_track", self.track))
         self.use_gyro_heading = p("~use_gyro_heading", True)
+        # Zero-velocity update: while the wheels are still and no drive command is
+        # active, hold the heading and keep re-estimating the gyro bias
+        self.zupt_delay = float(p("~zupt_delay", 0.5))       # s without wheel motion
+        self.zupt_bias_tau = float(p("~zupt_bias_tau", 20.0))  # s, bias low-pass
+        self.last_motion = time.time()
         self.publish_tf = p("~publish_tf", True)
         self.rate_hz = float(p("~rate", 30.0))
         self.odom_frame = p("~odom_frame", "odom")
         self.base_frame = p("~base_frame", "base_link")
         self.imu_frame = p("~imu_frame", "imu_link")
+        # Compass: hard-iron offsets from scripts/mag_calibrate.py, declination east-positive
+        self.mag_heading = p("~mag_heading", False)
+        self.mag_offset = (float(p("~mag_offset_x", 0.0)), float(p("~mag_offset_y", 0.0)))
+        self.mag_sign = float(p("~mag_sign", 1.0))
+        self.declination = math.radians(float(p("~declination_deg", 0.0)))
 
         self.m_per_count = 2.0 * math.pi * self.wheel_radius / self.counts_per_rev
 
@@ -95,6 +109,7 @@ class BaseNode(object):
         self.odom_pub = rospy.Publisher("odom", Odometry, queue_size=10)
         self.imu_pub = rospy.Publisher("imu/data_raw", Imu, queue_size=10)
         self.mag_pub = rospy.Publisher("imu/mag", MagneticField, queue_size=10)
+        self.imu_yaw_pub = rospy.Publisher("imu/data", Imu, queue_size=10)
         self.tick_pub = rospy.Publisher("wheel_ticks", Int32MultiArray, queue_size=10)
         self.tf_pub = tf2_ros.TransformBroadcaster()
         if self.motor:
@@ -120,8 +135,8 @@ class BaseNode(object):
 
     def on_cmd_vel(self, msg):
         v, w = msg.linear.x, msg.angular.z
-        self.set_side(self.left_motors, v - w * self.track / 2.0)
-        self.set_side(self.right_motors, v + w * self.track / 2.0)
+        self.set_side(self.left_motors, v - w * self.cmd_turn_track / 2.0)
+        self.set_side(self.right_motors, v + w * self.cmd_turn_track / 2.0)
         self.last_cmd_time = time.time()
 
     def side_ticks(self, chs):
@@ -159,6 +174,15 @@ class BaseNode(object):
         self.last_l, self.last_r = l, r
 
         d = (dl + dr) / 2.0
+        if dl or dr or (self.last_cmd_time is not None):
+            self.last_motion = time.time()
+        stationary = time.time() - self.last_motion > self.zupt_delay
+        if stationary:
+            # Robot is parked: the true yaw rate is zero, so whatever the gyro reads
+            # is bias. Track it slowly and don't integrate it into the heading.
+            a = min(1.0, dt / self.zupt_bias_tau)
+            self.gyro_bias_z += a * (gz / DEG2RAD - self.gyro_bias_z)
+            gz_corr = 0.0
         if self.use_gyro_heading:
             dyaw = gz_corr * dt
         else:
@@ -205,6 +229,20 @@ class BaseNode(object):
         mag.header = imu.header
         mag.magnetic_field = Vector3(mx * 1e-6, my * 1e-6, mz * 1e-6)  # uT -> T
         self.mag_pub.publish(mag)
+
+        if self.mag_heading and (mx or my):
+            # ENU yaw (0 = east, CCW positive), assuming the robot is level
+            yaw = self.mag_sign * math.atan2(mx - self.mag_offset[0],
+                                             my - self.mag_offset[1]) - self.declination
+            imu_yaw = Imu()
+            imu_yaw.header = imu.header
+            imu_yaw.orientation = yaw_to_quat(yaw)
+            imu_yaw.orientation_covariance = [1e3, 0, 0, 0, 1e3, 0, 0, 0, 0.05]
+            imu_yaw.angular_velocity = imu.angular_velocity
+            imu_yaw.angular_velocity_covariance = [1e-3, 0, 0, 0, 1e-3, 0, 0, 0, 1e-4]
+            imu_yaw.linear_acceleration = imu.linear_acceleration
+            imu_yaw.linear_acceleration_covariance = [0.1, 0, 0, 0, 0.1, 0, 0, 0, 0.1]
+            self.imu_yaw_pub.publish(imu_yaw)
 
         # raw counts of all four cape channels, for debugging wiring
         self.tick_pub.publish(Int32MultiArray(data=[encoder.get(ch) for ch in (1, 2, 3, 4)]))

@@ -5,7 +5,7 @@
 
   <include if="$(arg lidar)" file="$(find rplidar_ros)/launch/rplidar.launch"/>
 
-  <node pkg="bbai_base" type="base_node.py" name="bbai_base" output="screen" respawn="true" respawn_delay="2">
+  <node pkg="bbai_base" type="base_node.py" name="bbai_base" output="screen" respawn="true" respawn_delay="5">
     <rosparam file="$(find bbai_base)/config/base.yaml" command="load"/>
   </node>
 
@@ -14,9 +14,9 @@
     <param name="baud" value="4800"/>
   </node>
 
-  <!-- x y z yaw pitch roll; measure and update these offsets -->
+  <!-- x y z yaw pitch roll. The lidar faces backward: its 0 deg points to the robot's rear (lidar_mount_test.py, 2026-10-02) -->
   <node pkg="tf2_ros" type="static_transform_publisher" name="base_to_laser"
-        args="0 0 0.10 0 0 0 base_link laser"/>
+        args="0 0 0.10 3.14159 0 0 base_link laser"/>
   <node pkg="tf2_ros" type="static_transform_publisher" name="base_to_imu"
         args="0 0 0.05 0 0 0 base_link imu_link"/>
   <node pkg="tf2_ros" type="static_transform_publisher" name="base_to_gps"

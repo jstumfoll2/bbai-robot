@@ -11,6 +11,7 @@ counts_per_rev: 15.0
 # Robot geometry in meters (4-wheel skid steer, axle spacing 0.101 m)
 wheel_radius: 0.0396   # 79.2 mm wheels
 track_width: 0.120     # left-right wheel centers; only used if use_gyro_heading is false
+cmd_turn_track: 0.46   # effective skid-steer track for /cmd_vel turns (5.0 rad/s at 0.12 m gave 1.31 rad/s)
 use_gyro_heading: true
 publish_tf: true
 rate: 30.0
@@ -24,3 +25,9 @@ max_wheel_speed: 1.2
 max_duty: 0.6          # caps speed at ~0.7 m/s
 min_duty: 0.12         # wheels don't turn below ~8% duty; any nonzero command starts here
 cmd_timeout: 0.5       # stop motors if /cmd_vel goes quiet this long (s)
+# Compass (scripts/mag_calibrate.py spin, 2026-10-01: compass 745 deg vs gyro 724 deg over two turns)
+mag_heading: true
+mag_offset_x: 11.71    # uT, hard-iron offset
+mag_offset_y: 66.61
+mag_sign: 1
+declination_deg: 2.5   # magnetic declination, east positive (WMM estimate for home, 2026)
