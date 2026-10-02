@@ -1,0 +1,175 @@
+\chapter{SYSTEM OVERVIEW}
+\label{ch:overview}
+
+\section{PURPOSE AND SCOPE}
+
+This document records how the BeagleBone AI robot is built and how its
+software fits together: every change that was needed to bring each device up
+on the board, how the devices, computers and ROS nodes are connected, and the
+mathematics of the navigation and mapping algorithms. The navigation chapters
+(Chapters~\ref{ch:kinematics}--\ref{ch:slam}) derive the wheel odometry, the
+attitude and heading estimate from the gyroscope and magnetometer, the GPS
+measurement model, the extended Kalman filter that fuses them, and the SLAM
+algorithms that build the map. Chapter~\ref{ch:modes} lists the operating
+modes that are available with or without each sensor, and
+Chapter~\ref{ch:issues} collects known problems, including the analysis of the
+SLAM drift observed on 1 October 2026.
+
+The notation and the sensor-error models are taken from the author's master's
+thesis on the two-wheeled inverted pendulum (TWIP) \cite{stumfoll_twip}, in
+particular its treatment of IMU measurements (thesis \S4.3.1), its sensor noise
+model with a constant and a walking bias (thesis \S7.5), and its discrete
+Kalman filter (thesis \S7.7). Where this document reuses a result from the
+thesis it says so, so that the derivations can be read side by side.
+
+\section{GOALS}
+
+The goals, in Jason's priority order as of 1 October 2026, are:
+\begin{enumerate}
+\item Back up and version all of the board's work (done: this repository and
+      the \file{librobotcontrol} fork).
+\item Chase the dog using on-camera detection on the OAK-D-Lite.
+\item Map the house with lidar SLAM.
+\item Drive manually with a PS4 controller over Bluetooth.
+\item Publish the IMU, wheel odometry and GPS as ROS topics and fuse them into
+      a single navigation state.
+\end{enumerate}
+
+\section{PLATFORM SUMMARY}
+
+The robot is a small four-wheel skid-steer chassis. All four wheels are
+driven, each by its own DC gear motor with a Hall-effect encoder. A BeagleBone
+AI with a Robotics Cape is the only on-board computer. Table~\ref{tab:hw}
+lists the hardware and Figure~\ref{fig:system} shows how it is connected.
+
+\begin{table}[htbp]
+\centering
+\caption{Hardware}
+\label{tab:hw}
+\small
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{1.35in}X}
+\toprule
+Item & Details \\
+\midrule
+Computer & BeagleBone AI (TI AM5729: 2$\times$ Cortex-A15 at \SI{1.5}{GHz},
+  4$\times$ PRU, 2$\times$ C66x DSP, 4$\times$ EVE). Debian~10 Buster,
+  kernel \texttt{4.14.108-ti-r136}, Python~3.7, ROS Melodic built from source. \\
+Cape & Robotics Cape (Beaglebone Blue functionality as a cape): 4 H-bridge
+  motor channels, 4 encoder inputs, MPU-9250 IMU, barometer, UART and I$^2$C
+  headers, 2-cell LiPo input and charger. \\
+Drive & 4-wheel skid steer. Wheel diameter \SI{79.2}{mm}, left--right wheel
+  centres \SI{120}{mm}, axle spacing \SI{101}{mm}. \\
+Encoders & DAGU 8-pole magnet rings read by Allegro A1230 dual Hall sensors
+  (open-drain outputs). Measured \num{15} counts per wheel revolution. \\
+IMU & InvenSense MPU-9250 on the cape: 3-axis gyroscope, accelerometer and
+  AK8963 magnetometer. \\
+Lidar & SLAMTEC RPLIDAR A1M8 on a cape UART (\texttt{/dev/ttyS3}), about
+  \SI{7.2}{Hz} scan rate, \SIrange{0.15}{12}{m} range. \\
+GPS & GlobalSat EM-506 (SiRF Star IV) on \texttt{/dev/ttyS2}, NMEA at
+  \SI{4800}{baud}, \SI{1}{Hz}. \\
+Camera & Luxonis OAK-D-Lite (stereo depth plus RGB, Myriad X VPU) on the
+  BeagleBone's USB-A port. \\
+Radio & On-board Wi-Fi and Bluetooth (AzureWave AW-CM256SM, Broadcom BCM43455);
+  Bluetooth HCI on UART6 (\texttt{/dev/ttyS5}). \\
+Controller & Sony DualShock 4 (PS4) over Bluetooth. \\
+Power & 2-cell LiPo pack (\SI{8.17}{V} full) into the cape, or a bench supply. \\
+Off-board & Ubuntu 20.04 laptop with ROS Noetic (SLAM, sensor fusion, RViz);
+  Windows PC (development, camera calibration, board serial console on COM3). \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  font=\small,
+  box/.style={draw,rounded corners=2pt,align=center,minimum height=8mm,
+              inner sep=3pt,fill=white},
+  dev/.style={box,fill=black!5,minimum width=26mm},
+  comp/.style={box,fill=blue!6,minimum width=38mm},
+  link/.style={-{Latex[length=2mm]},thick},
+  lab/.style={font=\scriptsize,above,inner sep=1.5pt}]
+% BeagleBone with cape
+\node[comp,minimum height=56mm,minimum width=46mm] (bb) at (0,0) {};
+\node[anchor=north,align=center] at (bb.north) {\textbf{BeagleBone AI}\\[-1pt]
+  \scriptsize Debian 10, ROS Melodic\\[-2pt]\scriptsize ROS master};
+\node[box,minimum width=38mm] (pru) at (0,0.2) {PRU1\_1: encoder 4\\
+  \scriptsize PRU2\_0: motor 1 dir (rpmsg)};
+\node[box,minimum width=38mm] (cape) at (0,-1.5) {Robotics Cape\\
+  \scriptsize H-bridges, eQEP, MPU-9250};
+% devices on the left
+\node[dev] (gps) at (-5.7,1.2) {EM-506 GPS};
+\node[dev] (lid) at (-5.7,0.2) {RPLIDAR A1};
+\node[dev] (enc) at (-5.7,-0.8) {4$\times$ encoders};
+\node[dev] (mot) at (-5.7,-1.8) {4$\times$ DC motors};
+\draw[link] (gps.east) -- (gps.east -| bb.west) node[lab,midway]{UART \texttt{ttyS2}};
+\draw[link] (lid.east) -- (lid.east -| bb.west) node[lab,midway]{UART1 \texttt{ttyS3}};
+\draw[link] (enc.east) -- (enc.east -| bb.west) node[lab,midway]{quadrature};
+\draw[link] (mot.east -| bb.west) -- (mot.east) node[lab,midway]{PWM, dir.};
+% top
+\node[dev] (cam) at (-1.1,4.3) {OAK-D-Lite};
+\node[dev] (ps4) at (2.6,4.3) {PS4 controller};
+\draw[link,<->] (cam.south) -- (cam.south |- bb.north) node[font=\scriptsize,right,midway]{USB 2};
+\draw[link] (ps4.south) -- ++(0,-0.5) -| ([xshift=10mm]bb.north)
+   node[font=\scriptsize,right,pos=0.75]{Bluetooth \texttt{ttyS5}};
+% right
+\node[comp] (lap) at (6.1,1.3) {\textbf{Ubuntu laptop}\\ \scriptsize ROS Noetic\\[-2pt]\scriptsize SLAM, EKF, RViz};
+\node[comp,minimum height=16mm] (pc) at (6.1,-1.4) {\textbf{Windows PC}\\
+  \scriptsize SSH, Cloud9\\[-2pt]\scriptsize OAK calibration};
+\draw[link,<->] (lap.west -| bb.east) -- (lap.west) node[lab,midway]{Wi-Fi: ROS};
+\draw[link,<->] ([yshift=3mm]pc.west -| bb.east) -- ([yshift=3mm]pc.west) node[lab,midway]{Wi-Fi: SSH};
+\draw[link,dashed,<->] ([yshift=-4mm]pc.west -| bb.east) -- ([yshift=-4mm]pc.west)
+   node[font=\scriptsize,below,midway]{serial COM3};
+% power
+\node[dev] (bat) at (0,-4.2) {2S LiPo or bench supply};
+\draw[link] (bat.north) -- (bb.south);
+\end{tikzpicture}
+\caption{Physical and network connections}
+\label{fig:system}
+\end{figure}
+
+\section{DIVISION OF WORK BETWEEN THE COMPUTERS}
+
+The board runs everything that touches hardware: the ROS master, the lidar
+driver, the motor, encoder and IMU node, the GPS node, the PS4 teleop node and
+the chase node. The OAK-D-Lite runs its neural network on its own Myriad X, so
+the board only receives detections. The laptop runs everything that is heavy
+but not time-critical: SLAM, the EKF and navsat transform, and RViz. The
+laptop joins the board's ROS master over Wi-Fi
+(\texttt{ROS\_MASTER\_URI=http://192.168.3.120:11311}).
+
+This split follows a decision made on 1 October 2026: keep everything on the
+BeagleBone where possible, run SLAM on the laptop, and treat a Raspberry Pi~5
+as the fallback compute if the board runs out of headroom.
+
+\section{STATUS}
+
+\begin{table}[htbp]
+\centering
+\caption{Subsystem status, 2 October 2026}
+\label{tab:status}
+\small
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{1.45in}>{\raggedright\arraybackslash}p{0.8in}X}
+\toprule
+Subsystem & State & Notes \\
+\midrule
+Motors (all four) & Working & Motor 1 needs the PRU2\_0 firmware (\S\ref{sec:pru}). \\
+Encoders (all four) & Working & Needed pull-ups in the device tree (\S\ref{sec:dt}). \\
+Wheel odometry & Working & 0.914~m measured for a 0.914~m push. \\
+IMU (gyro, accel) & Working & Heading drift was \SI{1.6}{\degree/min} parked; zero with the new ZUPT. \\
+Magnetometer & Calibrated & Compass agrees with the gyro to 3\% over two turns. \\
+GPS & Working & No fix indoors, as expected. \\
+Lidar & Working & \SI{7.2}{Hz} on \texttt{ttyS3}. \\
+Bluetooth + PS4 & Working & Report stalls of 100--500~ms in bursts. \\
+SLAM (gmapping) & Poor & Loses track when driving; drifted when stationary.
+   Fixes being tested (\S\ref{sec:slamdiag}). \\
+GPS fusion (EKF) & Built, untested & Needs an outdoor run with a fix. \\
+OAK-D-Lite detection & Working & Resets the board under full load; waiting on
+   separate camera power. \\
+Chase controller & Dry run only & Waiting on camera power. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\influx{SLAM tuning, the EKF configuration and the teleop turn curve were all
+being changed on 2 October 2026. Each is marked where it appears.}

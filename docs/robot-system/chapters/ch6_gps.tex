@@ -1,0 +1,123 @@
+\chapter{GPS MEASUREMENT MODEL}
+\label{ch:gps}
+
+\section{NMEA TO NAVSATFIX}
+\label{sec:gpsnode}
+
+\texttt{gps\_node.py} reads \texttt{/dev/ttyS2} one line at a time, drops any
+sentence whose checksum fails (the XOR of every character between \texttt{\$}
+and \texttt{*}, compared with the two hex digits after \texttt{*}), and handles
+two sentence types.
+
+\paragraph{GGA (position).} Latitude and longitude arrive as
+\texttt{ddmm.mmmm} and \texttt{dddmm.mmmm}. With the integer degrees $d$ and
+minutes $m$,
+\begin{equation}
+\varphi = \pm\left(d + \frac{m}{60}\right),
+\end{equation}
+negative for S and W. The altitude published is the ellipsoidal height
+$h = H_{\mathrm{MSL}} + N$, where $H_{\mathrm{MSL}}$ is the antenna altitude
+above mean sea level (field 9) and $N$ the geoid separation (field 11). A
+quality field of 0 publishes \texttt{STATUS\_NO\_FIX} with NaN coordinates;
+quality 2 (differential/SBAS) publishes \texttt{STATUS\_SBAS\_FIX}.
+
+\paragraph{Position covariance.} The receiver does not report an error
+estimate, only the horizontal dilution of precision (HDOP). The node uses the
+standard approximation \cite{misra2006gps}
+\begin{equation}\label{eq:gpscov}
+\sigma_h = \mathrm{HDOP}\cdot\sigma_{\mathrm{UERE}},\qquad
+\Sigma_{\mathrm{ENU}} = \operatorname{diag}\!\bigl(\sigma_h^2,\ \sigma_h^2,\ 4\sigma_h^2\bigr),
+\end{equation}
+with a user-equivalent range error $\sigma_{\mathrm{UERE}}=\SI{5}{m}$ and the
+vertical taken as twice the horizontal. With a typical open-sky HDOP of 1 this
+is a \SI{5}{m} standard deviation, and the EKF automatically trusts a poor fix
+less.
+
+\paragraph{RMC (velocity).} Speed over ground $s$ (knots, times
+\SI{0.514444}{m/s}) and course over ground $c$ (degrees clockwise from true
+north) become an ENU velocity,
+\begin{equation}
+v_E = s\sin c,\qquad v_N = s\cos c,
+\end{equation}
+published on \topic{/gps/vel} only while there is a fix. The EKF does not
+currently use it.
+
+\section{GEODETIC TO LOCAL COORDINATES}
+
+The EKF works in metres, so latitude $\varphi$, longitude $\lambda$ and height
+$h$ must be turned into a local Cartesian frame. On the WGS-84 ellipsoid
+(semi-major axis $a=\SI{6378137}{m}$, eccentricity
+$e^2=\num{6.69437999e-3}$) the Earth-centred, Earth-fixed position is
+\begin{equation}\label{eq:ecef}
+\begin{aligned}
+X &= (R_N+h)\cos\varphi\cos\lambda,\\
+Y &= (R_N+h)\cos\varphi\sin\lambda,\\
+Z &= \bigl(R_N(1-e^2)+h\bigr)\sin\varphi,
+\end{aligned}
+\qquad R_N=\frac{a}{\sqrt{1-e^2\sin^2\varphi}},
+\end{equation}
+and the ENU offset from a reference point $(\varphi_0,\lambda_0)$ with ECEF
+position $\bm r_0$ is
+\begin{equation}\label{eq:enu}
+\begin{bmatrix}e\\n\\u\end{bmatrix}=
+\begin{bmatrix}
+-\sin\lambda_0 & \cos\lambda_0 & 0\\
+-\sin\varphi_0\cos\lambda_0 & -\sin\varphi_0\sin\lambda_0 & \cos\varphi_0\\
+\cos\varphi_0\cos\lambda_0 & \cos\varphi_0\sin\lambda_0 & \sin\varphi_0
+\end{bmatrix}(\bm r-\bm r_0).
+\end{equation}
+Over the few hundred metres a robot this size covers, \eqref{eq:enu} reduces
+to the flat-Earth approximation
+\begin{equation}\label{eq:flat}
+e\approx (R_N+h)\cos\varphi_0\,\Delta\lambda,\qquad
+n\approx (R_M+h)\,\Delta\varphi,\qquad
+R_M=\frac{a(1-e^2)}{(1-e^2\sin^2\varphi_0)^{3/2}},
+\end{equation}
+with angles in radians. At mid-latitudes one degree of latitude is about
+\SI{111}{km}, so the EM-506's \SI{5}{m} error is about $4.5\times10^{-5}$
+degrees.
+
+\section{THE NAVSAT TRANSFORM}
+\label{sec:navsat}
+
+robot\_localization's \texttt{navsat\_transform\_node} \cite{moore2014generalized}
+uses the Universal Transverse Mercator (UTM) projection instead of
+\eqref{eq:enu}: each fix becomes a UTM easting and northing $\bm u$, which is
+locally an ENU frame rotated by the small grid convergence angle (under
+\SI{2}{\degree} inside a zone, ignored here). The node builds a fixed
+transform from UTM to the EKF's world frame (\frm{gps\_map}) once, at the
+\emph{datum}:
+\begin{enumerate}
+\item With \texttt{wait\_for\_datum: false}, the datum is the first fix that
+  arrives (after a \SI{2}{s} delay), together with the robot's pose in the EKF
+  output $\bm p_0=(x_0,y_0,\psi_0)$ and the IMU heading $\psi_{\mathrm{imu},0}$
+  at that moment.
+\item The robot's heading in UTM is
+  $\psi_{\mathrm{utm},0}=\psi_{\mathrm{imu},0}+D_{\mathrm{nst}}+\psi_{\mathrm{off}}$.
+  On this robot the declination is already applied on the board and
+  \topic{/imu/data} is ENU yaw, so \texttt{magnetic\_declination\_radians}
+  $D_{\mathrm{nst}}=0$ and \texttt{yaw\_offset} $\psi_{\mathrm{off}}=0$.
+\item The transform maps a UTM point to the world frame by undoing the
+  robot's UTM pose at the datum and applying its world pose:
+\begin{equation}\label{eq:navsat}
+\bm x_w = R(\psi_0)\,R(\psi_{\mathrm{utm},0})\T\,\bigl(\bm u-\bm u_0\bigr)
+          + \begin{bmatrix}x_0\\y_0\end{bmatrix},
+\end{equation}
+where $R(\cdot)$ is the planar rotation matrix and $\bm u_0$ the datum's UTM
+position (offset by the antenna lever arm, here zero).
+\end{enumerate}
+Every later fix is pushed through \eqref{eq:navsat} and published on
+\topic{/odometry/gps} with the covariance \eqref{eq:gpscov} rotated by the
+same angle. That message is what the EKF fuses. The node also runs the
+inverse transform on the EKF output and publishes \topic{/gps/filtered}, the
+fused position as latitude and longitude. \texttt{zero\_altitude} is set, so
+height is ignored.
+
+\begin{remark}[The datum heading matters]
+Equation \eqref{eq:navsat} rotates every GPS fix by the compass heading taken
+at a single instant. A heading error $\delta\psi$ at the datum rotates the
+whole GPS track about the starting point, so a fix $\ell$ metres away lands
+$\ell\,\delta\psi$ off to the side: \SI{10}{\degree} of compass error puts a
+point \SI{20}{m} away \SI{3.5}{m} off. The datum should therefore be taken
+outdoors, away from steel, with the robot still.
+\end{remark}

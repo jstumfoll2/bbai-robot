@@ -1,0 +1,53 @@
+\chapter{KNOWN ISSUES AND NEXT STEPS}
+\label{ch:issues}
+
+\section{OPEN ISSUES}
+
+\begin{description}
+\item[Board resets under full load.] The cape's \SI{5}{V} rail drops out with
+  the camera, motors, lidar and Bluetooth all running (\S\ref{sec:power}).
+  Waiting on a USB splitter and battery bank to power the camera separately.
+\item[SLAM loses track while driving.] Analysis in \S\ref{sec:slamdiag}. The
+  parked drift is fixed on branch \texttt{slam-estimator-updates}; the lidar
+  mounting yaw is the leading remaining suspect and needs a drive test.
+\item[Skid-steer turning.] Low turn commands cannot overcome scrubbing friction
+  (\S\ref{sec:skidturn}). The teleop curve is a workaround; closed-loop
+  wheel-speed control would fix it properly.
+\item[Bluetooth input stalls.] Controller reports pause for 100--500~ms in
+  bursts. ROS itself was measured clean (no \topic{/cmd\_vel} gap over
+  \SI{58}{ms}). Parked as acceptable for now.
+\item[Placeholder static transforms.] The lidar, IMU and GPS offsets in
+  \file{robot.launch} have not been measured.
+\item[Constant odometry covariance.] \topic{/odom} reports a fixed pose
+  covariance (\S\ref{sec:odom}). Harmless for the current EKF, which fuses
+  only $v_x$, but wrong for any consumer of the pose.
+\item[Repository behind the robot.] The compass, ZUPT, GPS fusion and gmapping
+  changes are on \texttt{slam-estimator-updates}, not \texttt{main}. The
+  teleop turn curve is only on the board.
+\item[Pause and Mode buttons.] The cape's buttons still do not work.
+\end{description}
+
+\section{SUGGESTED IMPROVEMENTS}
+
+In rough order of value for the current goals:
+\begin{enumerate}
+\item Verify and set the lidar's yaw in \frm{base\_link}$\to$\frm{laser}
+  (\S\ref{sec:slamdiag}).
+\item Map with gentle turns, under about \SI{0.5}{rad/s}
+  (\S\ref{sec:skew}).
+\item Close the speed loop: a PI controller per side on encoder speed, with
+  the existing $d_{\min}$ as feed-forward, would make turning independent of
+  the floor and give the chase controller consistent response.
+\item Log \topic{/imu/data\_raw} at rest for an hour and fit the
+  error model \eqref{eq:sensormodel}--\eqref{eq:walkingbias} with Allan
+  variance, as in the thesis (thesis \S7.5). That gives principled process
+  noise for the EKF and a better ZUPT time constant.
+\item Publish a growing pose covariance from \eqref{eq:odomcov} instead of the
+  constant one.
+\item Fuse $v_y=0$ in the EKF and set a Mahalanobis rejection threshold on
+  GPS (\S\ref{sec:ekfcfg}).
+\item Consider slam\_toolbox, which handles loop closure and lifelong mapping
+  better than gmapping and can switch to localisation on a saved map.
+\item Align \frm{map} and \frm{gps\_map} with \eqref{eq:align} once there is
+  outdoor data.
+\end{enumerate}

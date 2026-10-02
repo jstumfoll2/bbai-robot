@@ -15,7 +15,7 @@ and [docs/HANDOFF.md](docs/HANDOFF.md).
 | `camera/` | OAK-D-Lite scripts for the board, and PC calibration tools plus the calibration backup |
 | `gps/` | libgps patch for the EM-506 on `/dev/ttyS2` |
 | `system/` | Board boot config, module blacklist, helper scripts |
-| `docs/` | Goals, handoff notes, camera calibration guide |
+| `docs/` | Goals, handoff notes, camera calibration guide, command cheat sheet, and the full system write-up with the navigation math ([`docs/robot-system/`](docs/robot-system/)) |
 
 ## ROS packages
 

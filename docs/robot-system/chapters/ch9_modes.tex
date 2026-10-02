@@ -1,0 +1,96 @@
+\chapter{OPERATING MODES}
+\label{ch:modes}
+
+The software is arranged so that each sensor can be left out and the rest
+still works. This chapter lists the modes that exist today, what each one
+estimates, and how to start it.
+
+\section{LOCALIZATION AND MAPPING MODES}
+
+\begin{table}[htbp]
+\centering
+\caption{Localization and mapping modes}
+\label{tab:modes}
+\small
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{1.25in}>{\raggedright\arraybackslash}p{1.25in}>{\raggedright\arraybackslash}p{1.35in}X}
+\toprule
+Mode & Sensors & Start & Position estimate \\
+\midrule
+\textbf{A. gmapping SLAM} (default) & lidar, encoders, gyro &
+  \texttt{robot.launch}; \texttt{start\_slam.sh} &
+  \frm{map}: odometry corrected by scan matching; drift bounded while the
+  map is consistent. \\
+\textbf{B. hector SLAM with odometry TF} & lidar (odometry only as TF) &
+  \texttt{start\_slam.sh hector} &
+  \frm{map}: scan matching only; fails under fast turns. \\
+\textbf{C. hector, lidar only} & lidar & \texttt{robot.launch}, then
+  \texttt{start\_slam.sh lidar\_only} (or the A1 alone) &
+  As B, with no wheel odometry at all; for carrying the robot. \\
+\textbf{D. Dead reckoning} & encoders, gyro & \texttt{robot.launch lidar:=false} &
+  \frm{odom} only: distance from encoders, heading from gyro with ZUPT;
+  unbounded drift (\S\ref{sec:odom}). \\
+\textbf{E. Encoder heading} & encoders & \texttt{use\_gyro\_heading: false} in
+  \file{base.yaml} & \frm{odom} with heading from \eqref{eq:diffdrive};
+  turns overestimated by $\chi$ (\S\ref{sec:skid}). Diagnostic only. \\
+\textbf{F. GPS fusion} (parallel to A--D) & GPS, compass, gyro, encoders &
+  \texttt{gps\_fusion.launch} on the laptop &
+  \frm{gps\_map}: bounded by GPS when there is a fix; coasts on odometry
+  with compass heading otherwise. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Mode F runs alongside any of A--D because it publishes no transform. In
+practice: indoors, run A and ignore F; outdoors, run F, and A as well if
+there are walls or obstacles within the lidar's range.
+
+\section{WHAT HAPPENS WHEN A SENSOR IS MISSING}
+
+\begin{table}[htbp]
+\centering
+\caption{Degradation by sensor}
+\label{tab:degrade}
+\small
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{1.1in}X}
+\toprule
+Missing & Effect \\
+\midrule
+GPS fix & Normal indoors. \topic{/gps/fix} reports \texttt{NO\_FIX}; the EKF
+  coasts. If the first fix comes later, navsat\_transform takes its datum
+  then. \\
+Compass & \topic{/imu/data} not published (\texttt{mag\_heading: false} or no
+  field); the EKF has no absolute heading and navsat\_transform cannot set a
+  datum, so mode F does not work. Odometry and SLAM are unaffected. \\
+Gyroscope (IMU) & \texttt{bbai\_base} cannot start (the IMU is initialised
+  unconditionally). Mode E would be the fallback but needs a code change to
+  skip the IMU. \\
+Encoders & Odometry reports no motion. Mode C still maps. ZUPT would treat the
+  robot as parked whenever no command is active. \\
+One encoder & Its side averages the remaining wheel with a stuck one, so that
+  side reads half its travel; fix the channel list in \file{base.yaml}. \\
+Lidar & Modes A--C unavailable; \texttt{robot.launch lidar:=false} gives D. \\
+Motor 1 PRU firmware & \texttt{/dev/rpmsg\_pru32} does not appear (the
+  base node logs a warning), \texttt{rc\_motor\_init} fails, and the motors
+  cannot be driven. \\
+Laptop & Everything on the board runs; no SLAM, no GPS fusion, no RViz. \\
+Bluetooth controller & Motors receive no commands; the \SI{0.5}{s} timeout
+  keeps them stopped. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{DRIVING MODES}
+
+\begin{description}
+\item[Manual (teleop).] Hold L1; left stick drives, right stick turns, R1
+  adds turbo. Releasing L1 stops the robot.
+\item[Chase, dry run.] \texttt{roslaunch bbai\_chase chase.launch}. Holding R2
+  publishes only the preview topic; nothing moves.
+\item[Chase, armed.] \texttt{chase.launch dry\_run:=false}. Holding R2 (with
+  L1 released) lets the chase node drive toward the target. Waiting on
+  separate camera power (\S\ref{sec:power}).
+\item[Calibration.] \texttt{rosrun bbai\_base mag\_calibrate.py} drives
+  \topic{/cmd\_vel} itself to spin two turns. \texttt{motor\_map\_test.py}
+  drives each motor in turn and must be run with \texttt{robot.launch}
+  stopped and the wheels lifted.
+\end{description}

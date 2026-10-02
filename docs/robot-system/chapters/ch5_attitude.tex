@@ -1,0 +1,279 @@
+\chapter{ATTITUDE AND HEADING}
+\label{ch:attitude}
+
+The robot drives on flat floors, so the navigation state needs only the yaw
+$\psi$ from the IMU. Roll and pitch matter only for tilt-compensating the
+magnetometer. This chapter derives the gyroscope heading used by the odometry,
+its error growth, the accelerometer tilt, and the magnetometer compass.
+
+\section{SENSOR FRAME}
+
+\texttt{librobotcontrol} returns the gyroscope, accelerometer and
+magnetometer in one common frame: the AK8963 magnetometer inside the MPU-9250
+has its $x$ and $y$ axes swapped and $z$ reversed relative to the gyroscope,
+and the library undoes that (\texttt{mpu.c}, $m_x\leftarrow m_y'$,
+$m_y\leftarrow m_x'$, $m_z\leftarrow -m_z'$). The static transform
+\frm{base\_link}$\to$\frm{imu\_link} has zero rotation, which assumes the
+cape's IMU axes coincide with the robot's $x$-forward, $y$-left, $z$-up axes.
+The yaw-rate sign has been confirmed in practice (gyro heading turns the right
+way in RViz and agrees with the compass over two turns); the $x$ and $y$ axes
+have not been checked separately.
+
+\section{SENSOR ERROR MODEL}
+
+Following the thesis (thesis \S7.5, after Gebre-Egziabher
+\cite{gebreegziabher2004design} and Flenniken \cite{flenniken2005modeling}),
+each inertial channel is modelled as
+\begin{equation}\label{eq:sensormodel}
+m = m_r + c_r + b_r + w_r,
+\end{equation}
+where $m_r$ is the true value, $c_r$ a constant bias that changes at every
+power-up, $b_r$ a walking bias and $w_r$ white noise of variance $\sigma_r^2$.
+The walking bias is a first-order Gauss--Markov process,
+\begin{equation}\label{eq:walkingbias}
+\dot b_r = -\frac{1}{\tau_r}b_r + w_{b_r},
+\end{equation}
+with $w_{b_r}$ white of intensity $2\sigma_{b_r}^2/\tau_r$, so that
+$\sigma_{b_r}^2$ is its steady-state variance. The thesis characterised an
+MPU-class gyroscope this way, with Allan variance, and found
+$\tau_r\approx\SI{1600}{s}$ (thesis Table~7.2); the same procedure can be
+reused on this IMU by logging \topic{/imu/data\_raw} at rest for an hour.
+
+\section{GYROSCOPE HEADING}
+\label{sec:gyro}
+
+\subsection{Bias removal at start-up}
+
+At start the base node averages the $z$ rate for $T_b=\SI{2}{s}$ with the
+robot stationary,
+\begin{equation}\label{eq:gyrobias}
+\hat b_g = \frac{1}{n}\sum_{i=1}^{n} g_{z,i},
+\end{equation}
+which estimates $c_r+b_r(0)$ in \eqref{eq:sensormodel}. This is the same
+start-up bias removal used on the TWIP (thesis \S4.3). The corrected rate
+$g_z-\hat b_g$ is integrated in \eqref{eq:dpsi}.
+
+\subsection{Heading error growth}
+
+The heading error after time $t$ has three parts. Integrating white noise
+gives an angle random walk; an error $\delta b=\hat b_g-(c_r+b_r(0))$ in the
+start-up estimate gives a linear ramp; and the walking bias adds a slower
+term,
+\begin{equation}\label{eq:headingerr}
+\delta\psi(t) = \underbrace{\int_0^t w_r\,\dd s}_{\sigma=N_g\sqrt t}
+\;+\;\underbrace{\delta b\,t}_{\text{start-up error}}
+\;+\;\int_0^t\bigl(b_r(s)-b_r(0)\bigr)\dd s .
+\end{equation}
+The MPU-9250 datasheet gives a rate-noise density of
+$N_g=\SI{0.01}{\degree/s/\sqrt{Hz}}$. The random-walk term is therefore
+$\SI{0.01}{\degree}\sqrt{t/\mathrm{s}}$, under \SI{0.1}{\degree} after one
+minute. Averaging over $T_b=\SI{2}{s}$ leaves $\delta b$ with a standard
+deviation of about $N_g/\sqrt{T_b}=\SI{0.007}{\degree/s}$, which would give
+about \SI{0.4}{\degree/min}.
+
+The measured drift at rest was \SI{1.6}{\degree/min}
+(\SI{0.027}{\degree/s}), four times larger. The noise terms cannot account
+for it, so most of it is bias that moves after the start-up average:
+temperature change as the board and motor drivers warm up (the datasheet
+allows the zero-rate offset to move by up to \SI{\pm30}{\degree/s} over the
+full temperature range) and the walking bias. Over a 10-minute mapping run
+this is about \SI{16}{\degree} of heading error if nothing corrects it. Two
+practical consequences:
+\begin{itemize}
+\item Measuring the bias after the robot has been powered for a few minutes
+  will reduce the error.
+\item The bias should keep being estimated while the robot runs. The base
+  node now does this whenever the robot is parked (\S\ref{sec:zupt}); the
+  magnetometer can also bound the heading (\S\ref{sec:compfilt}).
+\end{itemize}
+
+\subsection{Zero-velocity update}
+\label{sec:zupt}
+
+When the robot is parked its true yaw rate is zero, so whatever the gyroscope
+reads is bias. The base node uses this. Let $t_m$ be the last time any wheel
+tick changed or a \topic{/cmd\_vel} command was active. If
+$t-t_m>T_z=\SI{0.5}{s}$ the robot is declared stationary and, each cycle,
+\begin{equation}\label{eq:zupt}
+\hat b_{g,k} = \hat b_{g,k-1} + \alpha\bigl(g_{z,k}-\hat b_{g,k-1}\bigr),
+\qquad \alpha=\min\!\left(1,\frac{\Delta t}{\tau_z}\right),
+\qquad \Delta\psi_k = 0,
+\end{equation}
+with $\tau_z=\SI{20}{s}$. The first part is a first-order low-pass filter
+(time constant $\tau_z$) that tracks the walking bias $b_r$ of
+\eqref{eq:walkingbias}; the second freezes the heading. In Kalman filter terms
+this is a pseudo-measurement $\omega=0$ with zero variance on the heading and a
+steady-state gain $\alpha$ on the bias \cite{groves2013principles}. After the
+change, heading drift while parked fell from about \SI{1.5}{\degree/min} to
+zero (2 October 2026). Drift while driving is still governed by
+\eqref{eq:headingerr}, but every stop now re-estimates the bias.
+
+\begin{remark}
+The stationary test uses the wheels and the command, not the gyroscope. If the
+robot is picked up and turned by hand, or pushed sideways with the wheels
+locked, the heading will not follow, and the bias filter will absorb part of
+the real rotation. Carry the robot level and still, or restart
+\texttt{bbai\_base}, when moving it by hand.
+\end{remark}
+
+\section{TILT FROM THE ACCELEROMETER}
+
+The accelerometer measures specific force, which at rest is gravity in body
+axes. With roll $\phi$ and pitch $\theta$, the thesis derives (thesis
+eq.~4.2, after Kuipers \cite{kuipers1999quaternions})
+\begin{equation}\label{eq:rollpitch}
+\phi=\atantwo(a_y,a_z),\qquad
+\theta=\atantwo\!\left(-a_x,\sqrt{a_y^2+a_z^2}\right).
+\end{equation}
+This assumes no acceleration other than gravity, which is close enough for
+this robot's low accelerations, and could be filtered with the complementary
+filter of the thesis (thesis eq.~4.4) if needed. The current software does
+not use roll and pitch.
+
+\section{MAGNETOMETER COMPASS}
+\label{sec:mag}
+
+\subsection{Measurement model}
+
+The magnetometer measures Earth's field $\bm h$ rotated into the body frame,
+distorted by nearby material, plus noise \cite{gebreegziabher2006mag}:
+\begin{equation}\label{eq:magmodel}
+\bm m = S\,R\T\bm h + \bm b_{\mathrm{hi}} + \bm w_m .
+\end{equation}
+$R$ is the body-to-world rotation. The hard-iron offset $\bm b_{\mathrm{hi}}$
+is a constant field carried with the robot: permanent magnets in the motors
+and encoder rings, and steady currents. The matrix $S$ combines the sensor's
+scale factors, axis misalignment and soft-iron effects, where nearby steel
+bends Earth's field. On this robot the measured field magnitude was about
+\SI{150}{\micro T} against Earth's \SI{50}{\micro T}, so
+$\bm b_{\mathrm{hi}}$ dominates.
+
+\subsection{Planar calibration}
+
+When the robot spins on a level floor, $R$ is a rotation about $z$ alone and
+the horizontal components $(m_x,m_y)$ trace an ellipse; without soft-iron
+distortion it is a circle of radius $H$ (the horizontal field) centred on
+$(b_x,b_y)$. The calibration routine (\texttt{mag\_calibrate.py}) commands
+\SI{5}{rad/s} until the gyroscope has seen two full turns (or \SI{40}{s} pass),
+logging $(m_x,m_y)$ from \topic{/imu/mag}. A lower command stalls on the floor
+(\S\ref{sec:skidturn}).
+
+\paragraph{Circle fit (used).} The routine fits a circle by linear least
+squares (the K{\aa}sa fit \cite{kasa1976circle}): writing the circle as
+$m_x^2+m_y^2+Dm_x+Em_y+F=0$, each sample gives one linear equation in
+$(D,E,F)$, and the normal equations
+\begin{equation}\label{eq:kasa}
+\begin{bmatrix}\sum m_x^2&\sum m_xm_y&\sum m_x\\
+\sum m_xm_y&\sum m_y^2&\sum m_y\\
+\sum m_x&\sum m_y&n\end{bmatrix}
+\begin{bmatrix}D\\E\\F\end{bmatrix}
+=-\begin{bmatrix}\sum m_x z\\ \sum m_y z\\ \sum z\end{bmatrix},
+\qquad z=m_x^2+m_y^2,
+\end{equation}
+are solved by Cramer's rule. The hard-iron offset is the centre
+$(o_x,o_y)=(-D/2,-E/2)$ and the horizontal field is
+$H=\sqrt{o_x^2+o_y^2-F}$. The routine also unwraps the compass heading over
+the spin and compares its direction with the gyroscope's to set
+\texttt{mag\_sign} $\in\{+1,-1\}$. The result on 1 October 2026 was
+$(o_x,o_y)=(11.71,\,66.61)$~\si{\micro T}, $s=+1$. A circle fit removes the
+hard iron only; if the residual (printed as ``fit error'') grows, one of the
+estimators below adds soft-iron correction.
+
+\paragraph{Min--max (offset and per-axis scale).}
+\begin{equation}\label{eq:minmax}
+b_x=\tfrac12(m_x^{\max}+m_x^{\min}),\quad
+s_x=\frac{\bar\rho}{\tfrac12(m_x^{\max}-m_x^{\min})},
+\end{equation}
+and likewise for $y$, with $\bar\rho$ the mean of the two half-ranges. The
+corrected field is $m_x'=s_x(m_x-b_x)$, $m_y'=s_y(m_y-b_y)$. This handles
+hard iron and unequal axis gains but not rotation of the ellipse.
+
+\paragraph{Ellipse fit (full planar soft iron).} Fit the conic
+\begin{equation}
+A m_x^2 + B m_xm_y + C m_y^2 + D m_x + E m_y = 1
+\end{equation}
+to all samples by linear least squares. The centre
+$\bm b = -\tfrac12 M^{-1}[D\ E]\T$ with
+$M=\begin{bmatrix}A&B/2\\B/2&C\end{bmatrix}$ is the hard-iron offset, and the
+correction $\bm m' = M^{1/2}(\bm m-\bm b)$ maps the ellipse back to a circle.
+
+The routine prints the resulting lines for \file{base.yaml}. The check during
+calibration was that over the two-turn spin the compass heading advanced
+\SI{745}{\degree} while the gyroscope advanced \SI{724}{\degree}, against
+\SI{720}{\degree} actual. The gyroscope's scale factor is therefore good to
+about 0.6\% and the compass's residual distortion is about 3.5\%.
+
+\subsection{Heading from the field}
+
+On level ground, write the world (ENU) field's horizontal part in terms of the
+magnetic declination $D$ (positive when magnetic north is east of true north):
+$\bm h_{\mathrm{hor}} = H[\sin D,\ \cos D]\T$ in (east, north). With the robot
+at ENU yaw $\psi$, the body-frame components are
+\begin{equation}
+m_x' = H\sin(\psi+D),\qquad m_y' = H\cos(\psi+D),
+\end{equation}
+so
+\begin{equation}\label{eq:magyaw}
+\psi = \atantwo(m_x',\,m_y') - D .
+\end{equation}
+This is exactly what \texttt{base\_node.py} computes, with
+$m'=s\,(m-o)$ from the circle fit:
+$\psi_m = s\,\atantwo(m_x-o_x,\,m_y-o_y)-D$. It publishes $\psi_m$ as the
+orientation of \topic{/imu/data} with variance \SI{0.05}{rad^2}
+($\sigma\approx\SI{13}{\degree}$) on yaw and $10^3$ on roll and pitch (unknown),
+and the gyroscope rate with variance \SI{1e-4}{rad^2/s^2}.
+Checking the two easy cases: facing east ($\psi=0$) with $D=0$, north is on
+the robot's left, so $m_y'=H$, $m_x'=0$ and $\psi=0$; facing north
+($\psi=\pi/2$), north is straight ahead, $m_x'=H$ and $\psi=\pi/2$.
+
+Two conventions are easy to confuse here. A compass heading $\chi_c$ is measured
+clockwise from north, while ROS yaw is counter-clockwise from east:
+\begin{equation}
+\chi_c = \tfrac{\pi}{2}-\psi .
+\end{equation}
+The robot's declination is set to \SI{2.5}{\degree} east, computed from the
+NOAA World Magnetic Model \cite{wmm2025} for the robot's home location. (The
+coordinates themselves are deliberately not recorded in this document or the
+repository.)
+
+\subsection{Tilt compensation}
+
+If the robot is not level, the levelled field is
+\begin{equation}
+\bm m_h = R_y(\theta)R_x(\phi)\,\bm m',
+\end{equation}
+using the ZYX convention in which $R=R_z(\psi)R_y(\theta)R_x(\phi)$, and
+\eqref{eq:magyaw} is applied to $(m_{h,x},m_{h,y})$. With $\phi$ and $\theta$
+from \eqref{eq:rollpitch}. On a level floor $\bm m_h=\bm m'$. A \SI{5}{\degree}
+tilt with a magnetic inclination of about \SI{60}{\degree} (typical of the
+southern United States) produces up to about \SI{9}{\degree} of heading error,
+so compensation matters on ramps and lawns but not indoors.
+
+\subsection{Limits indoors}
+
+Indoors, steel in floors, appliances and wiring adds local fields that move
+the compass by tens of degrees as the robot drives. The calibration above
+removes only fields carried with the robot. The compass is therefore useful
+outdoors for initialising the GPS frame (\S\ref{sec:navsat}) but should not
+be trusted as an absolute heading inside the house.
+
+\section{FUSING GYRO AND COMPASS}
+\label{sec:compfilt}
+
+The gyroscope is precise over seconds and drifts over minutes; the compass is
+noisy and locally biased but does not drift. The thesis used exactly this
+structure for tilt (thesis eq.~4.4), and the heading version is
+\begin{equation}\label{eq:yawcf}
+\psi_{k+1} = \psi_k + (g_{z,k}-\hat b_g)\Delta t
+  + (1-\lambda)\,\wrap\!\bigl(\psi_{m,k}-\psi_k-(g_{z,k}-\hat b_g)\Delta t\bigr),
+\end{equation}
+where $\psi_m$ is \eqref{eq:magyaw}. The wrap is needed because the two
+headings can differ across the $\pm\pi$ boundary. The filter has a crossover
+time constant $\tau=\lambda\Delta t/(1-\lambda)$: with $\Delta t=$1/30$~s$,
+$\lambda=0.999$ gives $\tau\approx\SI{33}{s}$. Higgins \cite{higgins1975comparison}
+shows this is the steady-state Kalman filter for a random-walk heading with
+white measurement noise, which is the form the EKF of
+Chapter~\ref{ch:fusion} implements with time-varying gains.
+\eqref{eq:yawcf} is not currently running. The compass feeds only the GPS
+EKF on the laptop; the odometry heading that gmapping uses is gyroscope only,
+which is deliberate given the indoor limits above.

@@ -1,0 +1,244 @@
+\chapter{MAPPING: LIDAR SLAM}
+\label{ch:slam}
+
+The map is built on the laptop from the board's \topic{/scan} and the
+\frm{odom}$\to$\frm{base\_link} transform. Two SLAM packages are set up:
+gmapping, a Rao--Blackwellized particle filter that uses odometry and is the
+default, and hector\_mapping, a scan matcher that can run on the lidar alone.
+
+\section{OCCUPANCY GRID}
+
+Both build a 2-D occupancy grid with \SI{5}{cm} cells. Each cell $m_i$ holds
+the log-odds of being occupied,
+\begin{equation}
+\ell_i = \log\frac{p(m_i)}{1-p(m_i)},
+\end{equation}
+and every scan updates the cells along each beam by the inverse sensor model
+\cite{thrun2005probabilistic}:
+\begin{equation}\label{eq:logodds}
+\ell_{i,t} = \ell_{i,t-1} + \log\frac{p(m_i\mid z_t,x_t)}{1-p(m_i\mid z_t,x_t)} - \ell_0 .
+\end{equation}
+Cells a beam passes through become more likely free, and the cell where it
+ends more likely occupied. Because the update is additive, a scan registered
+at the wrong pose does not erase the old walls; it adds a second, rotated or
+shifted copy. That is why a pose error shows up as a ``jumbled'' map rather
+than a moved one.
+
+\section{GMAPPING}
+\label{sec:gmapping}
+
+\subsection{Rao--Blackwellized particle filter}
+
+SLAM estimates the joint posterior of the robot's path $x_{1:t}$ and the map
+$m$, given scans $z_{1:t}$ and odometry $u_{1:t-1}$. gmapping
+\cite{grisetti2007improved} factors it as
+\begin{equation}\label{eq:rbpf}
+p(x_{1:t},m\mid z_{1:t},u_{1:t-1}) =
+p(m\mid x_{1:t},z_{1:t})\;p(x_{1:t}\mid z_{1:t},u_{1:t-1}).
+\end{equation}
+Given a path, the map follows by \eqref{eq:logodds}, so only the path needs a
+particle filter; each of the $M$ particles carries one path hypothesis and
+its own map \cite{doucet2000rao,murphy1999bayesian}. Per accepted scan, each
+particle $i$:
+\begin{enumerate}
+\item \textbf{Predicts} with the odometry motion model: the change in
+  \frm{odom}$\to$\frm{base\_link} since the last update, split into a
+  translation $\Delta_\rho$ and a rotation $\Delta_\psi$, is perturbed by
+  Gaussian noise with standard deviations
+\begin{equation}\label{eq:gmapmotion}
+\sigma_\rho = s_{rr}\abs{\Delta_\rho} + s_{rt}\abs{\Delta_\psi},\qquad
+\sigma_\psi = s_{tr}\abs{\Delta_\rho} + s_{tt}\abs{\Delta_\psi},
+\end{equation}
+  (parameters \texttt{srr}, \texttt{srt}, \texttt{str}, \texttt{stt}).
+\item \textbf{Scan-matches} the new scan against its own map, starting from
+  the predicted pose $x'$, by hill-climbing in steps of \texttt{lstep} (m) and
+  \texttt{astep} (rad) to maximise a likelihood-field score
+\begin{equation}\label{eq:gmapscore}
+s(x) = \sum_{j}\exp\!\left(-\frac{d_j(x)^2}{\sigma}\right),
+\end{equation}
+  where $d_j(x)$ is the distance from the endpoint of beam $j$ (projected from
+  pose $x$) to the nearest occupied cell, and $\sigma$ is the parameter
+  \texttt{sigma}. Only beams shorter than \texttt{maxUrange} are used.
+\item \textbf{Samples} its new pose from a Gaussian fitted around the best
+  match $\hat x^\star$ (the ``improved proposal''), which combines the scan
+  match with \eqref{eq:gmapmotion}. If the best score is below
+  \texttt{minimumScore}, the match is considered unreliable and the
+  particle falls back to the odometry prediction $x'$.
+\item \textbf{Reweights}: $w^{(i)}_t \propto w^{(i)}_{t-1}\,\eta^{(i)}$, where
+  $\eta^{(i)}=\int p(z_t\mid m^{(i)},x)\,p(x\mid x^{(i)}_{t-1},u_{t-1})\,\dd x$
+  is approximated from the same samples.
+\end{enumerate}
+When the effective sample size
+\begin{equation}
+N_{\mathrm{eff}} = \frac{1}{\sum_i \bigl(\tilde w^{(i)}\bigr)^2}
+\end{equation}
+of the normalised weights $\tilde w$ falls below
+$\texttt{resampleThreshold}\cdot M$, particles are resampled. The best
+particle's map is published on \topic{/map} every
+\texttt{map\_update\_interval} seconds, and its pose sets the transform
+\frm{map}$\to$\frm{odom} such that
+\begin{equation}
+T_{\frm{map}\leftarrow\frm{base\_link}} =
+T_{\frm{map}\leftarrow\frm{odom}}\;T_{\frm{odom}\leftarrow\frm{base\_link}} .
+\end{equation}
+That composition is how the SLAM pose and the odometry pose integrate: the
+odometry provides a smooth, \SI{30}{Hz} pose that drifts, and SLAM publishes
+the slowly changing correction that cancels the drift.
+
+\subsection{When scans are processed}
+
+A scan is processed only if the robot has moved at least
+\texttt{linearUpdate} metres or turned \texttt{angularUpdate} radians
+according to odometry since the last processed scan, or, if
+\texttt{temporalUpdate} is positive, if that many seconds have passed.
+
+\subsection{Parameters}
+
+\begin{table}[htbp]
+\centering
+\caption{gmapping parameters (\file{laptop/bbai\_slam/gmapping\_bbai.launch})}
+\label{tab:gmap}
+\small
+\begin{tabular}{lccl}
+\toprule
+Parameter & 1 Oct & 2 Oct & Effect \\
+\midrule
+\texttt{particles} $M$ & 50 & 40 & path hypotheses \\
+\texttt{temporalUpdate} & \SI{2.0}{s} & off ($-1$) & process scans while parked \\
+\texttt{linearUpdate} / \texttt{angularUpdate} & 0.10 / 0.10 & 0.10 / 0.10 & motion between scans (m / rad) \\
+\texttt{minimumScore} & 0 & 100 & reject weak scan matches \\
+\texttt{srr}, \texttt{srt}, \texttt{str}, \texttt{stt} & 0.1, 0.2, 0.1, 0.2$^\dagger$ & 0.05 each & odometry noise \eqref{eq:gmapmotion} \\
+\texttt{sigma}, \texttt{lstep}, \texttt{astep} & 0.05$^\dagger$ & 0.05 & scan-match kernel and steps \\
+\texttt{maxUrange} / \texttt{maxRange} & 8 / 12 m & 6 / 12 m & usable / maximum beam length \\
+\texttt{map\_update\_interval} & \SI{2.0}{s} & \SI{1.0}{s} & map publishing \\
+\texttt{resampleThreshold} & 0.5$^\dagger$ & 0.5 & resample when $N_{\mathrm{eff}}<M/2$ \\
+\texttt{delta} & \SI{0.05}{m} & \SI{0.05}{m} & cell size \\
+\texttt{transform\_publish\_period} & \SI{0.05}{s}$^\dagger$ & \SI{0.05}{s} & \frm{map}$\to$\frm{odom} rate \\
+\bottomrule
+\multicolumn{4}{l}{\footnotesize $^\dagger$ package default, not set in the launch file}
+\end{tabular}
+\end{table}
+
+\influx{The 2 October values are on branch \texttt{slam-estimator-updates}
+and were being tested when this was written.}
+
+\section{HECTOR MAPPING}
+\label{sec:hector}
+
+hector\_mapping \cite{kohlbrecher2011flexible} has no particles and no
+odometry model. It aligns each scan directly to the map built so far. With the
+scan's beam endpoints $\bm s_j$ in the robot frame and the pose
+$\bm\xi=(p_x,p_y,\psi)$, the endpoints in the map are
+\begin{equation}
+\bm S_j(\bm\xi) = R(\psi)\bm s_j + \begin{bmatrix}p_x\\p_y\end{bmatrix},
+\end{equation}
+and the pose minimises
+\begin{equation}\label{eq:hectorobj}
+\bm\xi^\star=\argmin_{\bm\xi}\sum_j\bigl[1-M(\bm S_j(\bm\xi))\bigr]^2,
+\end{equation}
+where $M(\cdot)\in[0,1]$ is the occupancy value bilinearly interpolated
+between grid cells. One Gauss--Newton step from the current estimate is
+\begin{equation}\label{eq:hectorgn}
+\Delta\bm\xi = H^{-1}\sum_j\left[\nabla M(\bm S_j)\frac{\partial\bm S_j}{\partial\bm\xi}\right]\T
+\bigl[1-M(\bm S_j)\bigr],\qquad
+H=\sum_j\left[\nabla M\frac{\partial\bm S_j}{\partial\bm\xi}\right]\T
+\left[\nabla M\frac{\partial\bm S_j}{\partial\bm\xi}\right],
+\end{equation}
+with
+\begin{equation}
+\frac{\partial\bm S_j}{\partial\bm\xi}=
+\begin{bmatrix}1&0&-\sin\psi\,s_{j,x}-\cos\psi\,s_{j,y}\\
+0&1&\cos\psi\,s_{j,x}-\sin\psi\,s_{j,y}\end{bmatrix}.
+\end{equation}
+The match is run coarse-to-fine on a pyramid of maps (2 levels here) to widen
+its basin of convergence. Hector converges only if the true pose is within
+about one coarse cell and a few degrees of the previous estimate, so it fails
+when the robot turns faster than the scan rate can follow
+(\S\ref{sec:skew}). On this robot it is the fallback for mapping without
+odometry (\file{lidar\_only\_bbai.launch}), for example when carrying the
+robot by hand.
+
+\section{SCAN RATE AND ROTATION}
+\label{sec:skew}
+
+The A1 delivers about 7.2 scans per second, so between scans, and during the
+\SI{0.14}{s} it takes to sweep one scan, the robot turns by
+\begin{equation}
+\Delta\psi_{\mathrm{scan}} = \frac{\omega}{f_{\mathrm{scan}}}.
+\end{equation}
+\begin{center}
+\small
+\begin{tabular}{lccc}
+\toprule
+Turn rate & \SI{0.5}{rad/s} & \SI{1.5}{rad/s} & \SI{6}{rad/s} \\
+\midrule
+Rotation per scan & \SI{4}{\degree} & \SI{12}{\degree} & \SI{48}{\degree} \\
+\bottomrule
+\end{tabular}
+\end{center}
+Neither SLAM package corrects the distortion within a scan (each beam is
+treated as if taken at the scan's time stamp), so a scan taken while turning
+at \SI{1.5}{rad/s} is itself bent by up to \SI{12}{\degree} from its first
+beam to its last. gmapping's \texttt{angularUpdate} of \SI{0.1}{rad}
+(\SI{5.7}{\degree}) also means that at \SI{1.5}{rad/s} nearly every scan is
+processed while bent. Mapping is most reliable with turns below about
+\SI{0.5}{rad/s}. The new teleop curve keeps half stick at
+\SI{1.5}{rad/s}; turning gently (well under half stick) while mapping is
+better still.
+
+\section{DIAGNOSING THE SLAM DRIFT OF 1 OCTOBER}
+\label{sec:slamdiag}
+
+Jason observed that gmapping made a good first map, lost track once the robot
+moved, and, when left stationary, slowly rotated the map into a jumble. Each
+symptom has a distinct likely cause.
+
+\paragraph{Map rotating while parked.} With \texttt{temporalUpdate} at
+\SI{2}{s}, gmapping processed a scan every two seconds even when the robot did
+not move. The gyroscope heading drifted about \SI{1.6}{\degree/min} while
+parked (\S\ref{sec:gyro}), so each new scan arrived with a slightly rotated
+odometry pose. The scan matcher absorbs a small rotation, but with only
+about 360 beams per scan and a cell size of \SI{5}{cm}, its correction is
+imperfect, and the residual is written into the map by \eqref{eq:logodds}.
+Repeated every two seconds this smears the walls into a rotating blur. Two
+changes address it (branch \texttt{slam-estimator-updates}):
+\texttt{temporalUpdate} $=-1$, so a parked robot adds no scans, and the
+zero-velocity update (\S\ref{sec:zupt}), which removes the heading drift
+while parked. Parked drift measured afterwards was zero.
+
+\paragraph{Losing track while driving.} Several causes can each produce this,
+and they are best ruled out in order:
+\begin{enumerate}
+\item \textbf{Lidar mounting yaw.} The static transform
+  \frm{base\_link}$\to$\frm{laser} has zero yaw. \texttt{rplidar\_ros} reports
+  angle zero along the A1's own zero direction, which is marked on its housing
+  and is often mounted facing backward. If the transform's yaw is off by
+  \SI{180}{\degree}, a spin in place still looks consistent (the scan rotates
+  in the same direction either way), but driving forward makes the walls
+  appear to approach from behind: odometry and scan disagree on every metre
+  travelled and the map breaks as soon as the robot drives. This matches the
+  symptom closely. \emph{Test:} in RViz with fixed frame \frm{odom}, drive
+  slowly straight toward a wall. The wall should stay still; if it moves, the
+  yaw is wrong. (This check is open and waiting on a drive test.)
+\item \textbf{Turning too fast.} See \S\ref{sec:skew}.
+\item \textbf{Weak scan matches.} At the A1's range and with about 360 beams,
+  narrow corridors and open rooms give the matcher little to hold on to.
+  \texttt{minimumScore} now rejects weak matches in favour of odometry, which
+  is reliable over short distances after the calibration
+  (\SI{0.914}{m} measured for \SI{0.914}{m}). \texttt{maxUrange} was reduced to
+  \SI{6}{m} because the A1's error grows with range.
+\item \textbf{Odometry noise model.} With \texttt{srr}--\texttt{stt} at their
+  defaults (0.1--0.2), particles spread far more than the calibrated odometry
+  warrants, and with only 40--50 particles the filter can lock onto a wrong
+  hypothesis. They are now 0.05.
+\item \textbf{Clocks.} Scans and transforms are stamped by the board's clock,
+  which has no battery-backed time source and is not synchronised to the
+  laptop. gmapping looks up odometry at each scan's stamp, which both come
+  from the board, so this is not expected to cause the drift, but running
+  \texttt{chrony} on both machines removes a class of TF extrapolation
+  warnings.
+\end{enumerate}
+
+\influx{The lidar thread is working on these. Its results, and any change
+to the lidar's static transform, belong in \file{robot.launch} and this
+section.}
