@@ -1,0 +1,330 @@
+\chapter{HARDWARE REFERENCE}
+\label{ch:platform}
+
+This chapter describes every piece of hardware on the robot: what it is, its
+relevant specifications, and how it is connected. The next chapter covers
+the software changes that were needed to make each piece work on the
+BeagleBone AI.
+
+\section{CHASSIS AND DRIVETRAIN}
+
+The chassis is a small four-wheel-drive platform bought from SparkFun, with an
+aluminium plate added as a deck for the electronics. Each wheel is driven by
+its own brushed DC gear motor, and the two motors on each side are commanded
+together, which makes the robot a skid-steer vehicle
+(\S\ref{sec:skid}). Table~\ref{tab:chassis} gives the measured geometry.
+
+\begin{table}[htbp]
+\centering
+\caption{Chassis geometry (measured 2026-10-01)}
+\label{tab:chassis}
+\small
+\begin{tabular}{lll}
+\toprule
+Quantity & Value & Note \\
+\midrule
+Wheel diameter & \SI{79.2}{mm} & radius $r=\SI{39.6}{mm}$ \\
+Track (left--right wheel centres) & \SI{120}{mm} & $b$ \\
+Wheelbase (front--back axles) & \SI{101}{mm} & $L$; $L/b=0.84$ \\
+Encoder resolution & 15 counts per wheel turn & \SI{16.6}{mm} of travel per count \\
+Top speed (wheels lifted, duty 1) & about \SI{1.2}{m/s} & capped to about \SI{0.65}{m/s} in software \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The encoders are DAGU magnetic encoder kits: an 8-pole ring magnet on each
+wheel hub read by an Allegro A1230 dual Hall sensor. Because the magnet turns
+with the wheel, the encoder measures the wheel itself, after the gearbox. This
+is the opposite trade from the TWIP, whose encoders were on the motor shaft
+ahead of the gearbox (thesis \S4.2.3): here gear backlash is seen by the
+encoder, but the resolution is about 100 times coarser per wheel turn.
+
+\section{BEAGLEBONE AI}
+\label{sec:bbai}
+
+The BeagleBone AI is built around the Texas Instruments AM5729 system on chip
+(the Sitara AM57x family). It keeps the BeagleBone Black's form factor and its
+two 46-pin expansion headers, P8 and P9, so BeagleBone capes physically fit.
+Table~\ref{tab:bbai} summarises the parts that matter for the robot.
+
+\begin{table}[htbp]
+\centering
+\caption{BeagleBone AI}
+\label{tab:bbai}
+\small
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{1.45in}X}
+\toprule
+Block & Details and use on the robot \\
+\midrule
+CPU & 2$\times$ ARM Cortex-A15 at \SI{1.5}{GHz}. Runs Linux, ROS and all the
+  Python nodes. \\
+DSP & 2$\times$ TI C66x floating-point DSP. Unused. \\
+EVE & 4$\times$ Embedded Vision Engine vector processors, used by TI's TIDL
+  deep-learning library. Used for the 2022 webcam classification demo; the
+  OAK-D-Lite has since taken over vision. \\
+PRU-ICSS & 2 industrial communication subsystems, each with 2 PRU cores at
+  \SI{200}{MHz} (4 in total). PRU1\_1 counts encoder 4; PRU2\_0 drives motor 1's
+  direction pin (\S\ref{sec:pru}). \\
+IPU & 2$\times$ dual Cortex-M4. Unused. \\
+Memory & \SI{1}{GB} DDR3, \SI{16}{GB} eMMC (boots Debian), microSD slot. \\
+Peripherals & eQEP quadrature decoders (3 used for encoders 1--3), ePWM
+  (motor PWM), UARTs, I$^2$C, SPI, GPIO, ADC. \\
+Connectivity & Gigabit Ethernet; AzureWave AW-CM256SM module (Broadcom BCM43455):
+  dual-band Wi-Fi on SDIO and Bluetooth on UART6; USB Type-C (power and USB~3
+  device/host); USB Type-A host (USB~2, used by the OAK-D-Lite). \\
+Power & \SI{5}{V} in through USB-C, or through the headers' \texttt{SYS\_5V}
+  pins, which is how the Robotics Cape powers it. A TPS659037 PMIC makes the
+  internal rails. \\
+Cooling & A fan (from the parts list) on the heat sink; the AM5729 runs hot
+  under load. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\paragraph{Header multiplexing.} On the BeagleBone Black each header pin
+connects to one ball of the AM335x. On the BeagleBone AI many header pins are
+wired to \emph{two} AM5729 balls (written P9.19a and P9.19b, for example), to
+reach more functions. Only one of the two may be driven; the other must be set
+to an input or to mode 15 (off) in the device tree, or the two outputs fight.
+Each ball has up to 16 multiplexer modes; the robot uses mode 10 for eQEP and
+ePWM, mode 12 and 13 for PRU inputs and outputs, mode 14 for GPIO and modes
+1--7 for UART and I$^2$C. The PRU pin map that guided the motor~1 fix is in
+\file{claudefiles/beagleboneAI/PRUs/} in the project files: it shows that
+P9.13's reachable ball (C17) offers \texttt{pr2\_pru0\_gpo15} in mode 13 and
+no ordinary GPIO.
+
+\section{ROBOTICS CAPE}
+\label{sec:cape}
+
+The Robotics Cape (Strawson Design SD-101D, revision D, sold as
+BB-CAPE-ROBOTICS) was designed for the BeagleBone Black. It carries the
+robot's power system, motor drivers, IMU and connectors.
+Figure~\ref{fig:cape} shows its blocks, and the schematic is in
+\file{claudefiles/RoboticsCape/} in the project files.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[font=\scriptsize,
+  b/.style={draw,rounded corners=2pt,fill=white,align=center,minimum height=9mm,
+            minimum width=25mm,inner sep=2pt},
+  p/.style={b,fill=orange!10},
+  s/.style={b,fill=blue!6},
+  a/.style={-{Latex[length=1.6mm]},semithick}]
+\node[p] (jack) at (0,3.4) {Barrel jack\\ \SIrange{9}{18}{V} \texttt{VDC}};
+\node[p] (lipo) at (0,1.8) {2S LiPo, JST-XH\\ \texttt{V\_BATT} \SIrange{6}{8.4}{V}};
+\node[p] (chg) at (3.4,3.4) {Charger MP2615\\ \SI{1}{A}, \SI{4.2}{V}/cell};
+\node[p] (prot) at (3.4,1.8) {Balancer BQ29209\\ protector S-8261};
+\node[p] (reg5) at (7.0,3.4) {\SI{5}{V} buck AP1509\\ \SI{2}{A}};
+\node[p] (reg6) at (7.0,1.8) {\SI{6}{V} buck AOZ1284\\ servo rail};
+\node[s] (bb) at (10.6,3.4) {BeagleBone AI\\ \texttt{SYS\_5V}, P8/P9};
+\node[s] (servo) at (10.6,1.8) {8 servo/ESC\\ outputs (unused)};
+\node[s] (hb) at (0,-0.2) {2$\times$ TB6612FNG\\ 4 H-bridges M1--M4};
+\node[s] (enc) at (3.4,-0.2) {4 encoder ports\\ E1--E4 (JST-SH)};
+\node[s] (imu) at (7.0,-0.2) {MPU-9250 IMU\\ BMP280 barometer};
+\node[s] (io) at (10.6,-0.2) {UART1, UART5, GPS,\\ DSM2, SPI, I$^2$C, ADC};
+\draw[a] (jack) -- (chg);
+\draw[a] (chg) -- (prot);
+\draw[a] (lipo) -- (prot);
+\draw[a] (jack.north) -- ++(0,0.4) -| (reg5.north);
+\draw[a] (prot.east) -- ++(0.35,0) |- (reg5.west);
+\draw[a] (prot) -- (reg6);
+\draw[a] (reg5) -- (bb);
+\draw[a] (reg6) -- (servo);
+\draw[a] (lipo.south) -- (hb.north) node[midway,left]{\texttt{V\_BATT}};
+\end{tikzpicture}
+\caption{Robotics Cape (SD-101D) blocks}
+\label{fig:cape}
+\end{figure}
+
+\subsection{Power}
+
+\begin{description}
+\item[Inputs.] A 2-cell LiPo on a 3-pin JST-XH connector (\texttt{V\_BATT}
+  plus the cell midpoint for balancing), and a \SI{5.5}{mm}$\times$\SI{2.1}{mm} centre-positive
+  barrel jack for \SIrange{9}{18}{V} DC (\texttt{VDC}). A \SI{9}{V}, \SI{2}{A}
+  adapter is on the parts list. Either input can run the robot.
+\item[Charger.] An MPS MP2615 charges the pack from \texttt{VDC} at \SI{1}{A}
+  (set by a \SI{0.1}{\ohm} sense resistor) to \SI{4.2}{V} per cell.
+\item[Protection.] A TI BQ29209 balances the two cells and a Seiko S-8261
+  cuts the pack off at \SI{4.3}{V} per cell (overcharge) or \SI{2.5}{V} per
+  cell (over-discharge).
+\item[\SI{5}{V} rail.] A Diodes AP1509 buck regulator, fed from \texttt{VDC} or
+  \texttt{V\_BATT} through diodes, makes \SI{5}{V} at up to \SI{2}{A}. This
+  rail powers the BeagleBone through \texttt{SYS\_5V}, and through it the
+  BeagleBone's USB ports and everything plugged into them. Its \SI{2}{A} limit
+  is central to the board resets (\S\ref{sec:powerbudget}).
+\item[\SI{6}{V} rail.] An AOZ1284 buck powers the servo headers when enabled
+  by \texttt{SERVO\_EN}. Unused.
+\item[Monitoring.] Two dividers of \SI{47}{k\ohm} and \SI{4.7}{k\ohm} scale
+  \texttt{VDC} and \texttt{V\_BATT} by $1/11$ into the \SI{1.8}{V} ADC.
+  Four LEDs show battery level.
+\end{description}
+
+\subsection{Motor drivers}
+
+Two Toshiba TB6612FNG dual H-bridges drive the four motor ports (H1: M1 and
+M2; H2: M3 and M4) directly from \texttt{V\_BATT}. Each channel has two
+direction inputs (\texttt{IN1}, \texttt{IN2}, the cape's \texttt{MDIRxA/B})
+and a PWM input, and a shared standby line (\texttt{MOT\_STBY}) enables both
+chips. Per channel the TB6612FNG is rated \SI{1.2}{A} continuous and
+\SI{3.2}{A} peak, at up to \SI{15}{V}. Its truth table is
+\begin{center}
+\small
+\begin{tabular}{cccl}
+\toprule
+\texttt{IN1} & \texttt{IN2} & \texttt{PWM} & Output \\
+\midrule
+H & L & H & forward (current one way) \\
+L & H & H & reverse \\
+H & H & x & short brake \\
+L & L & H & coast (outputs off) \\
+x & x & L & short brake \\
+\bottomrule
+\end{tabular}
+\end{center}
+so speed is set by PWM duty with the direction held on \texttt{IN1/IN2}
+(sign--magnitude drive). During the PWM off-time the bridge short-brakes the
+motor, which makes average speed close to proportional to duty.
+librobotcontrol runs the PWM at \SI{25}{kHz}.
+
+\subsection{Encoder ports}
+
+Four 4-pin JST-SH connectors, E1--E4, each carry GND, \SI{3.3}{V} and the A
+and B signals. E1--E3 go to three eQEP hardware decoders; E4 goes to PRU
+inputs (on the BeagleBone Black it was read by PRU firmware too, since the
+AM335x has only three eQEPs). There are no pull-up resistors on these lines on
+the cape, which is why the device tree must enable the SoC's internal ones
+(\S\ref{sec:dt}).
+
+\subsection{Sensors on the cape}
+
+The MPU-9250 IMU sits on the cape's I$^2$C2 bus with its interrupt on
+\texttt{IMU\_INT} (P9.25). A Bosch BMP280 barometer shares the bus at address
+\texttt{0x76}; it is not used. The I$^2$C buses have \SI{4.7}{k\ohm} pull-ups.
+
+\subsection{Connectors}
+
+\begin{table}[htbp]
+\centering
+\caption{Robotics Cape connectors and what is plugged into them}
+\label{tab:capeconn}
+\small
+\begin{tabularx}{\linewidth}{lllX}
+\toprule
+Connector & Type & Pins & On this robot \\
+\midrule
+M1--M4 & JST-ZH 2-pin & motor $\pm$ & M1 left back, M2 left front, M3 right front, M4 right back \\
+E1--E4 & JST-SH 4-pin & GND, 3.3V, A, B & encoders: ch1 left back, ch2 right back, ch3 left front, ch4 right front \\
+UART1 & JST-SH 4-pin & GND, 3.3V, RX, TX & RPLIDAR A1 data (\texttt{/dev/ttyS3}) \\
+GPS & JST-SH 6-pin & GND, 3.3V, RX, TX, 5V, GND & EM-506 (\texttt{/dev/ttyS2}) \\
+UART5 & JST-SH 4-pin & GND, 3.3V, RX, TX & free \\
+DSM2 & JST-ZH 3-pin & RX, GND, 3.3V & free (radio receiver was considered) \\
+I$^2$C1, SPI1.1/1.2, ADC & JST-SH & & free \\
+PWR & JST-SH 4-pin & 5V, 3.3V, GND & free; auxiliary power \\
+Servo 1--8 & 0.1'' 3-pin & signal, 6V, GND & free \\
+LiPo / jack & JST-XH 3-pin / barrel & & battery / bench supply \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The cape's buttons (Pause, Mode) and LEDs (red, green, battery) are routed to
+P8 GPIOs; the buttons do not work on the BeagleBone AI yet.
+
+\section{SENSORS}
+
+\subsection{MPU-9250 IMU}
+
+\begin{table}[htbp]
+\centering
+\caption{MPU-9250 characteristics used here (datasheet rev.~1.1)}
+\label{tab:mpu}
+\small
+\begin{tabularx}{\linewidth}{l>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{40mm}}
+\toprule
+& Value & Note \\
+\midrule
+Gyro range & \SI{\pm250}{\degree/s} (131 LSB per \si{\degree/s}) & default in librobotcontrol \\
+Gyro rate-noise density & \SI{0.01}{\degree/s/\sqrt{Hz}} & \\
+Gyro zero-rate offset & \SI{\pm5}{\degree/s} initial, \SI{\pm30}{\degree/s} over temperature & hence start-up bias removal \\
+Accel noise density & \SI{300}{\micro g/\sqrt{Hz}} & \\
+Magnetometer (AK8963) & \SI{\pm4800}{\micro T} range & axes differ from gyro; library realigns \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{RPLIDAR A1M8}
+
+A triangulation laser scanner on a rotating head driven by its own motor.
+It measures up to 8000 times per second, \SIrange{0.15}{12}{m}, with
+resolution under 1\% of distance, over 360 degrees. Scan rate is 1--10~Hz
+(5.5~Hz typical); on this robot it settles at about \SI{7.2}{Hz}. The scanner
+core needs \SIrange{4.9}{5.5}{V} with low ripple (about \SI{300}{mA} running,
+\SI{500}{mA} at start-up) and the motor \SIrange{5}{9}{V}. Data is
+\SI{115200}{baud} serial at \SI{3.3}{V}, which goes to the cape's UART1
+header; the cape's UART headers carry only \SI{3.3}{V}, so the lidar's power
+comes from a separate \SI{5}{V} feed.
+
+\subsection{EM-506 GPS}
+
+A GlobalSat module with a SiRF Star IV chipset and built-in patch antenna:
+\SI{-163}{dBm} tracking sensitivity, under \SI{2.5}{m} horizontal error (50\%,
+open sky), cold start under \SI{35}{s} (hot under \SI{1}{s}), NMEA 0183 at
+\SI{4800}{baud}, \SI{1}{Hz}, SBAS (WAAS) capable. It draws about
+\SI{50}{mA} from \SIrange{4.5}{6.5}{V}, which the cape's GPS header provides.
+
+\subsection{Wheel encoders (A1230)}
+
+Each A1230 contains two Hall switches \SI{1}{mm} apart whose outputs are in
+quadrature when they face a matching ring magnet. Outputs are open-drain,
+sinking up to \SI{20}{mA}, and need an external pull-up; supply is
+\SIrange{3.3}{18}{V}. Decoding the four edges of the two channels gives
+$4\times$ the number of pole pairs per revolution.
+
+\subsection{OAK-D-Lite camera}
+
+A stereo depth and AI camera; Chapter~\ref{ch:camera} covers it in detail.
+
+\subsection{PS4 controller}
+
+A Sony DualShock~4 over Bluetooth Classic HID, read through the kernel's
+\texttt{hid-sony} driver as \texttt{/dev/input/js0}.
+
+\section{POWER BUDGET}
+\label{sec:powerbudget}
+
+Everything except the motors runs from the cape's \SI{5}{V} rail, which is
+limited to \SI{2}{A} by the AP1509. Table~\ref{tab:budget} estimates the
+load.
+
+\begin{table}[htbp]
+\centering
+\caption{\SI{5}{V} rail load (estimates from datasheets)}
+\label{tab:budget}
+\small
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}X l l}
+\toprule
+Load & Current at \SI{5}{V} & Source \\
+\midrule
+BeagleBone AI, both A15 cores busy, Wi-Fi and BT & \SIrange{0.8}{1.2}{A} & typical for the board \\
+OAK-D-Lite running depth and detection & \SIrange{0.8}{1.2}{A} (1.5 max) & datasheet: \SIrange{4}{6}{W} \\
+RPLIDAR A1 core + motor & \SIrange{0.4}{0.6}{A} & datasheet \\
+GPS, IMU, encoders & \SI{0.07}{A} & datasheets \\
+\midrule
+Total & \SIrange{2.1}{3.1}{A} & vs.\ \SI{2}{A} regulator \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The estimated total exceeds the regulator's rating once the camera runs
+alongside everything else, which matches what was observed: the camera
+alone, or everything without the camera, ran fine, while the full load reset
+the board with the battery voltage steady. The camera datasheet anticipates
+this: hosts that cannot supply its current should use a USB Y-adapter that
+feeds the camera from a separate supply. That is the planned fix (a USB
+splitter cable and battery bank), which moves \SIrange{0.8}{1.5}{A} off the
+cape's rail.
+
+The motors draw from \texttt{V\_BATT} directly through the H-bridges, not
+from the \SI{5}{V} rail. Their start-up and stall currents can still sag the
+battery and the regulator's input, which is another reason to keep the
+\SI{5}{V} load well below \SI{2}{A}.

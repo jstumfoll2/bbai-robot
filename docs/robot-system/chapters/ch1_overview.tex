@@ -4,16 +4,23 @@
 \section{PURPOSE AND SCOPE}
 
 This document records how the BeagleBone AI robot is built and how its
-software fits together: every change that was needed to bring each device up
-on the board, how the devices, computers and ROS nodes are connected, and the
-mathematics of the navigation and mapping algorithms. The navigation chapters
-(Chapters~\ref{ch:kinematics}--\ref{ch:slam}) derive the wheel odometry, the
-attitude and heading estimate from the gyroscope and magnetometer, the GPS
-measurement model, the extended Kalman filter that fuses them, and the SLAM
-algorithms that build the map. Chapter~\ref{ch:modes} lists the operating
+software fits together. Chapter~\ref{ch:platform} describes every piece of
+hardware: the chassis, the BeagleBone AI, the Robotics Cape, each sensor, and
+the power budget. Chapter~\ref{ch:hardware} records every change that was
+needed to bring each device up on the board, and Chapter~\ref{ch:ros} shows
+how the devices, computers and ROS nodes are connected. The navigation
+chapters derive the wheel odometry (Chapter~\ref{ch:kinematics}), the motor
+control and tracking loops (Chapter~\ref{ch:motor}), the attitude and
+heading estimate from the gyroscope and magnetometer
+(Chapter~\ref{ch:attitude}), the GPS measurement model
+(Chapter~\ref{ch:gps}), the extended Kalman filter that fuses them
+(Chapter~\ref{ch:fusion}), and the SLAM algorithms that build the map
+(Chapter~\ref{ch:slam}). Chapter~\ref{ch:camera} covers the OAK-D-Lite
+stereo depth camera and Chapter~\ref{ch:chase} the chase behaviour that uses
+it to follow a dog or a person. Chapter~\ref{ch:modes} lists the operating
 modes that are available with or without each sensor, and
-Chapter~\ref{ch:issues} collects known problems, including the analysis of the
-SLAM drift observed on 1 October 2026.
+Chapter~\ref{ch:issues} collects known problems, including the analysis of
+the SLAM drift observed on 1 October 2026.
 
 The notation and the sensor-error models are taken from the author's master's
 thesis on the two-wheeled inverted pendulum (TWIP) \cite{stumfoll_twip}, in

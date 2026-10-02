@@ -1,0 +1,397 @@
+\chapter{CHASE: FOLLOWING A DOG OR PERSON}
+\label{ch:chase}
+
+The chase behaviour points the robot at a detected dog (or, for testing, a
+person) and drives toward it until it is a set distance away. This chapter
+describes the whole chain: the on-camera pipeline, the neural network that
+recognises the target, how detections become a track, the control law and its
+stability, how it shares the motors with teleop, and the plan for bringing it
+up on the robot. \S\ref{sec:chase} gives a short summary of the ROS node.
+
+\influx{Chase has only been run in dry-run mode, where it computes commands
+but never sends them to the motors. It is waiting on the camera's separate
+power supply (\S\ref{sec:powerbudget}).}
+
+\section{PIPELINE}
+\label{sec:chasepipe}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  box/.style={draw,rounded corners=2pt,align=center,font=\small,
+              minimum height=10mm,inner sep=3pt,text width=24mm},
+  arr/.style={-{Stealth[length=2mm]},thick},
+  lab/.style={font=\scriptsize,align=center}]
+\node[box] (rgb) {IMX214 colour\\1080p, 10 fps};
+\node[box,below=6mm of rgb] (mono) {2$\times$ OV7251\\400P, 10 fps};
+\node[box,right=8mm of rgb] (prev) {Preview\\$300\times300$};
+\node[box,right=8mm of mono] (stereo) {StereoDepth\\aligned to RGB};
+\node[box,right=8mm of prev,yshift=-8mm,text width=30mm] (nn)
+  {MobileNet-SSD\\spatial detection\\(Myriad X)};
+\node[box,right=8mm of nn,text width=26mm] (node) {\texttt{chase\_node}\\select, debounce,\\smooth, control};
+\node[box,below=12mm of node,text width=26mm] (base) {\texttt{bbai\_base}\\motors};
+\node[box,above=8mm of node,text width=26mm] (joy) {PS4 \topic{/joy}\\R2 arms, L1 overrides};
+\draw[arr] (rgb) -- (prev);
+\draw[arr] (mono) -- (stereo);
+\draw[arr] (prev) -- (nn);
+\draw[arr] (stereo) -- (nn);
+\draw[arr] (nn) -- node[above,lab]{USB}(node);
+\draw[arr] (node) -- node[right,lab]{\topic{/cmd\_vel}\\(armed, not dry run)}(base);
+\draw[arr] (joy) -- (node);
+\begin{scope}[on background layer]
+\node[draw,dashed,rounded corners,fit=(rgb)(mono)(prev)(stereo)(nn),inner sep=4pt,
+      label={[font=\scriptsize]above:OAK-D-Lite}] {};
+\end{scope}
+\end{tikzpicture}
+\caption{Chase pipeline. Everything inside the dashed box runs on the
+camera; the BeagleBone sees only detections.}
+\label{fig:chasepipe}
+\end{figure}
+
+Figure~\ref{fig:chasepipe} shows the data flow. The DepthAI pipeline built by
+the node has five parts: the colour camera at 1080p producing a
+$300\times300$ preview, the two mono cameras at 400P, a \texttt{StereoDepth}
+node in high-density mode with depth aligned to the colour camera
+(\S\ref{sec:stereo}), and a \texttt{MobileNetSpatialDetectionNetwork} that
+runs the detector on the preview and attaches a 3-D position to every
+detection (\S\ref{sec:spatial}). The camera runs at the node's
+\texttt{fps} parameter, 10 by default, which bounds the detection rate. The
+model is the OpenVINO 2021.4 MobileNet-SSD compiled for 6 SHAVE cores
+(\file{\textasciitilde/models/mobilenet-ssd\_openvino\_2021.4\_6shave.blob}).
+
+A background thread reads detection messages from the camera and keeps the
+latest list of $(\text{label},\text{confidence},X,Z,\bar u)$ tuples, with
+$\bar u\in[0,1]$ the box centre across the image. If the camera throws (USB
+disconnect, power dip), the thread records the error, reports
+\texttt{CAMERA\_ERROR}, and retries every \SI{2}{s}. (On the board,
+\texttt{numpy} and \texttt{rospy} must be imported before \texttt{depthai},
+or the depthai import fails.)
+
+\section{OBJECT RECOGNITION: MOBILENET-SSD}
+\label{sec:mobilenet}
+
+\paragraph{Backbone.} MobileNet \cite{howard2017mobilenets} replaces each
+standard convolution with a \emph{depthwise separable} one: a $D_K\times D_K$
+convolution applied to each of the $M$ input channels separately, followed
+by a $1\times1$ convolution that mixes them into $N$ output channels. On a
+$D_F\times D_F$ feature map the cost falls from
+$D_K^2MND_F^2$ to $D_K^2MD_F^2+MND_F^2$ multiply-adds, a ratio of
+\begin{equation}
+\frac{D_K^2MD_F^2+MND_F^2}{D_K^2MND_F^2}=\frac1N+\frac1{D_K^2}\approx\frac19
+\quad(D_K=3,\ N\gg9).
+\end{equation}
+That eight- to nine-fold saving is what lets the detector run at camera
+frame rate on the Myriad~X.
+
+\paragraph{Detector head.} SSD \cite{liu2016ssd} predicts objects directly
+from several feature maps of decreasing resolution (for MobileNet-SSD at
+$300\times300$: $19\times19$, $10\times10$, $5\times5$, $3\times3$,
+$2\times2$ and $1\times1$). Each cell of each map carries a few fixed
+\emph{default boxes} of different sizes and aspect ratios, 1917 in all. For
+every default box $a=(a_x,a_y,a_w,a_h)$ the network outputs 21 class scores
+and four offsets $(t_x,t_y,t_w,t_h)$, decoded to a box by
+\begin{equation}
+b_x=a_x+\sigma_c t_x a_w,\quad
+b_y=a_y+\sigma_c t_y a_h,\quad
+b_w=a_w e^{\sigma_s t_w},\quad
+b_h=a_h e^{\sigma_s t_h},
+\end{equation}
+with the standard variances $\sigma_c=0.1$, $\sigma_s=0.2$. The class scores
+pass through a softmax. Boxes whose best class score is below the confidence
+threshold (0.5 here) are dropped, and \emph{non-maximum suppression} removes
+duplicates: boxes are taken in descending score, and any box overlapping a
+kept box of the same class by intersection-over-union
+\begin{equation}
+\mathrm{IoU}(A,B)=\frac{\abs{A\cap B}}{\abs{A\cup B}}
+\end{equation}
+above a threshold (typically 0.45) is discarded. All of this runs on the
+camera.
+
+\paragraph{Classes.} The network is trained on PASCAL VOC
+\cite{everingham2010pascal}, whose 20 classes plus background include
+\emph{dog} (index 12) and \emph{person} (index 15), as well as cat, which
+the network may confuse with a small dog. The node's \texttt{targets}
+parameter chooses which labels to follow: \texttt{[dog]} by default, and
+\texttt{[dog, person]} for testing by walking in front of the camera. In
+bench tests the network detected the dog at 93--99\% confidence, about 10
+times per second.
+
+\section{FROM DETECTIONS TO A TRACK}
+\label{sec:chasemeas}
+
+Each time a new detection frame arrives (about \SI{10}{Hz}) the node:
+\begin{enumerate}
+\item keeps detections whose label is in \texttt{targets} and takes the most
+  confident one;
+\item computes the measured bearing and range in the camera frame, using
+  depth if it is valid:
+\begin{equation}\label{eq:chasemeas}
+(\beta_m,\rho_m)=\begin{cases}
+\bigl(\atantwo(X,Z),\ \sqrt{X^2+Z^2}\bigr) & Z>\SI{0.05}{m},\\[2pt]
+\bigl((\bar u-\tfrac12)\,\theta_h,\ \text{unknown}\bigr) & \text{otherwise},
+\end{cases}
+\end{equation}
+  with $\beta$ positive to the right and $\theta_h$ the parameter
+  \texttt{rgb\_hfov\_deg} (see \S\ref{sec:previewcrop} on its value);
+\item smooths both with an exponential moving average (EMA) of weight $a=0.5$
+  on the new sample,
+\begin{equation}\label{eq:ema}
+\hat\beta_k = a\beta_{m,k}+(1-a)\hat\beta_{k-1},
+\end{equation}
+  and the same for $\rho$ (a missing range keeps the previous one);
+\item counts consecutive frames with a target, $h$. A frame with no target
+  resets $h$ to 0, and the next detection restarts the EMA from the raw
+  measurement.
+\end{enumerate}
+The node publishes the smoothed target as a point on \topic{/chase/target}
+in the camera frame.
+
+\paragraph{The EMA as a filter.} With samples every $T=\SI{0.1}{s}$,
+\eqref{eq:ema} is the discretization of a first-order low-pass filter with
+time constant
+\begin{equation}
+\tau_e=\frac{-T}{\ln(1-a)}=\frac{0.1}{\ln2}\approx\SI{0.14}{s},
+\end{equation}
+which cuts the variance of white bearing noise to a third
+($\operatorname{var}\hat\beta = \frac{a}{2-a}\operatorname{var}\beta_m=\frac13\operatorname{var}\beta_m$)
+at the cost of \SI{0.14}{s} of lag.
+
+\paragraph{Debounce and loss.} A command is produced only when $h\ge3$ (three
+consecutive frames, \SI{0.3}{s}) and the last detection is less than
+\SI{0.5}{s} old. The three-frame rule rejects one-off false positives, but
+because a single missed frame resets $h$, it also means one dropped detection
+stops the robot for at least \SI{0.3}{s}. Table~\ref{tab:chasestate} lists the
+states reported on \topic{/chase/status} twice a second.
+
+\begin{table}[htbp]
+\centering
+\caption{Chase states}
+\label{tab:chasestate}
+\small
+\begin{tabularx}{\linewidth}{lX}
+\toprule
+State & Meaning \\
+\midrule
+\texttt{SEARCH} & No usable target: none seen, fewer than 3 consecutive hits, or the last one older than \SI{0.5}{s}. Commands zero. \\
+\texttt{TRACK} & Target held; the status line shows label, confidence, range, bearing and the command. \\
+\texttt{CAMERA\_ERROR} & The camera thread failed; it retries every \SI{2}{s}. \\
+\texttt{ARMED} / \texttt{idle} & Suffix: whether R2 is held (and L1 is not). \\
+\texttt{(dry run)} & Suffix: commands go only to \topic{/chase/cmd\_vel\_preview}. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{CONTROL LAW}
+\label{sec:chaselaw}
+
+At \SI{15}{Hz} the node turns the track into a velocity command:
+\begin{align}
+\omega &= \begin{cases}
+  \sat_{\omega_{\max}}\!\bigl(-k_\beta\hat\beta\bigr) & \abs{\hat\beta}>\beta_{\mathrm{db}},\\
+  0 & \text{otherwise},\end{cases}\label{eq:chasew}\\
+v &= \sat_{[0,v_{\max}]}\!\bigl(k_\rho(\hat\rho-\rho_f)\bigr)\cdot
+     \sat_{[0,1]}\!\Bigl(1-\frac{\abs{\hat\beta}}{\beta_{\mathrm{full}}}\Bigr)
+     \quad\text{if }\hat\rho>\rho_{\mathrm{stop}},\ \text{else }0,\label{eq:chasev}
+\end{align}
+with the parameters in Table~\ref{tab:chaseparams}. The minus sign in
+\eqref{eq:chasew} is because a target to the right ($\beta>0$) needs a
+clockwise turn, which is negative $\omega$ in REP-103. The second factor in
+\eqref{eq:chasev} scales forward speed down while the robot is still turning
+toward the target, reaching zero at \SI{25}{\degree} off-axis, so the robot
+turns first and then drives. $v$ is never negative: the robot does not back
+away from a target that comes too close, it just stops.
+
+\begin{table}[htbp]
+\centering
+\caption{Chase parameters (\texttt{chase.launch})}
+\label{tab:chaseparams}
+\small
+\begin{tabular}{llll}
+\toprule
+Symbol & Parameter & Value & Role \\
+\midrule
+$k_\beta$ & \texttt{k\_angular} & \SI{2.5}{s^{-1}} & turn rate per radian of bearing \\
+$\omega_{\max}$ & \texttt{max\_angular} & \SI{2.0}{rad/s} & turn-rate limit \\
+$\beta_{\mathrm{db}}$ & \texttt{bearing\_deadband\_deg} & \SI{5}{\degree} & no turning inside this \\
+$\beta_{\mathrm{full}}$ & \texttt{full\_speed\_bearing\_deg} & \SI{25}{\degree} & forward speed zero beyond this \\
+$k_\rho$ & \texttt{k\_linear} & \SI{0.4}{s^{-1}} & forward speed per metre of range error \\
+$v_{\max}$ & \texttt{max\_linear} & \SI{0.2}{m/s} & forward speed limit (deliberately slow) \\
+$\rho_f$ & \texttt{follow\_distance} & \SI{0.9}{m} & range it settles at \\
+$\rho_{\mathrm{stop}}$ & \texttt{stop\_distance} & \SI{0.5}{m} & no forward motion inside this \\
+$a$ & \texttt{smoothing} & 0.5 & EMA weight \\
+ & \texttt{min\_hits}, \texttt{lost\_timeout} & 3, \SI{0.5}{s} & debounce and loss \\
+ & \texttt{rate}, \texttt{fps} & \SI{15}{Hz}, 10 & control and camera rates \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Bearing loop}
+
+For a stationary target, turning the robot left by $\dd\psi$ moves the
+target right by the same angle, so $\dot\beta=\omega_{\mathrm{actual}}$.
+Ignoring saturation and the dead band, and if the robot turns at the
+commanded rate, the loop is
+\begin{equation}
+\dot\beta = -k_\beta\,\beta,
+\end{equation}
+which converges exponentially with time constant $1/k_\beta=\SI{0.4}{s}$.
+
+\paragraph{Delay and stability.} The real loop has delay: the camera frame
+period and network latency, the \SI{15}{Hz} control and \SI{30}{Hz} base
+loops, and the motor's response, which together are roughly
+$\tau_d\approx\SI{0.2}{s}$, plus the EMA's lag $\tau_e=\SI{0.14}{s}$. The
+open-loop transfer function is then
+\begin{equation}
+L(s)=\frac{k_\beta\,e^{-s\tau_d}}{s(\tau_e s+1)} .
+\end{equation}
+Its gain crosses one at $\omega_c\approx\SI{2.4}{rad/s}$, where the phase
+margin is
+\begin{equation}
+\phi_m = \SI{90}{\degree}-\frac{\SI{180}{\degree}}{\pi}\,\omega_c\tau_d-\arctan(\omega_c\tau_e)
+\approx 90-28-19=\SI{44}{\degree}.
+\end{equation}
+That is adequate: the step response will overshoot slightly but settle. The
+loop would go unstable at a total delay of about \SI{0.52}{s}, and the
+margin shrinks quickly with gain (Table~\ref{tab:chasepm}), which is why
+\emph{raising $k_\beta$ is not the way to make the robot turn harder.}
+
+\begin{table}[htbp]
+\centering
+\caption{Bearing-loop phase margin, $\tau_e=\SI{0.14}{s}$}
+\label{tab:chasepm}
+\small
+\begin{tabular}{lccc}
+\toprule
+ & $\tau_d=\SI{0.15}{s}$ & $\tau_d=\SI{0.2}{s}$ & $\tau_d=\SI{0.3}{s}$ \\
+\midrule
+$k_\beta=2.5$ & \SI{51}{\degree} & \SI{44}{\degree} & \SI{30}{\degree} \\
+$k_\beta=4$ & \SI{32}{\degree} & \SI{22}{\degree} & \SI{2}{\degree} \\
+$k_\beta=6$ & \SI{13}{\degree} & unstable & unstable \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Will the robot actually turn?} The bearing loop assumes the
+robot turns at the commanded rate, and on this robot it does not
+(\S\ref{sec:skidturn}). The detector only sees the central part of the
+colour frame, about $\pm\SI{21}{\degree}$ if the preview is cropped
+(\S\ref{sec:previewcrop}), so the largest command chase will ever send is
+$2.5\times0.37\approx\SI{0.92}{rad/s}$, and even the \SI{2}{rad/s} limit maps
+through \eqref{eq:sidespeed}--\eqref{eq:duty} to a duty of only 0.16--0.21.
+Teleop's old \SI{1.5}{rad/s} full stick (duty 0.19) could not start a spin
+on the floor. Chase will therefore very likely stall on turns: the motors
+form a dead zone in the loop, the bearing error sits there, and nothing
+happens until $v$ (which is held near zero by the bearing factor) or a
+nudge breaks it free. The fix belongs below the chase node, in the yaw-rate
+loop of \S\ref{sec:yawloop}, so that a commanded rate is delivered on any
+floor; until then a larger turning duty floor in \texttt{bbai\_base} for
+spins in place is the quick workaround.
+
+\subsection{Range loop}
+
+For a stationary target straight ahead, $\dot\rho=-v$, and
+\eqref{eq:chasev} gives $\dot\rho=-k_\rho(\rho-\rho_f)$ away from the limits:
+the range settles at $\rho_f$ with time constant $1/k_\rho=\SI{2.5}{s}$.
+Beyond $\rho_f+v_{\max}/k_\rho=\SI{1.4}{m}$ the speed saturates and the robot
+closes at a steady \SI{0.2}{m/s}. A target receding at speed $u<v_{\max}$ is
+followed with a steady lag $\rho-\rho_f=u/k_\rho$ (\SI{0.25}{m} at
+\SI{0.1}{m/s}); a target faster than \SI{0.2}{m/s}, which includes a walking
+dog, is lost. At these settings the behaviour is a slow \emph{follow}, not a
+chase, which is the intent for first tests. The range loop needs no delay
+analysis: its bandwidth is far below the delay.
+
+\section{ARBITRATION AND SAFETY}
+\label{sec:chasesafety}
+
+\begin{itemize}
+\item \textbf{Dry run by default.} Unless launched with
+  \texttt{dry\_run:=false}, chase never publishes \topic{/cmd\_vel}; it only
+  publishes what it would send on \topic{/chase/cmd\_vel\_preview}.
+\item \textbf{Dead-man arming.} Commands go to \topic{/cmd\_vel} only while
+  R2 (button 7) is held and L1 (button 4, teleop's dead-man) is not. Releasing
+  R2 sends one zero command. Teleop and chase therefore never publish at the
+  same time, and the base node, which applies whichever command arrived last,
+  needs no arbitration logic of its own.
+\item \textbf{Timeouts.} Chase stops if \topic{/joy} is silent for
+  \SI{0.5}{s} (controller out of range) or the target is lost for
+  \SI{0.5}{s}; the base node stops the motors if \topic{/cmd\_vel} is silent
+  for \SI{0.5}{s}. Every failure ends in stopped motors.
+\item \textbf{Speed.} \SI{0.2}{m/s} forward, no reverse, no forward motion
+  closer than \SI{0.5}{m}.
+\item \textbf{No obstacle avoidance.} Chase drives straight at the target and
+  does not look at the lidar. Anything between the robot and the dog will be
+  hit at up to \SI{0.2}{m/s}.
+\end{itemize}
+
+\section{BRING-UP PLAN}
+\label{sec:chaseplan}
+
+Once the camera runs from the battery bank through the USB splitter:
+\begin{enumerate}
+\item \textbf{Power soak.} Run \texttt{robot.launch}, lidar and chase (dry
+  run) together for several minutes while driving with teleop, and confirm no
+  reset and no \texttt{CAMERA\_ERROR}.
+\item \textbf{Dry run with a person.} \texttt{dry\_run\_test.sh} launches chase
+  with \texttt{targets:=[dog, person]}, then prints the status, the preview
+  commands and the publishers of \topic{/cmd\_vel}, which must not include
+  chase. Walk across the field of view and check that the sign of
+  \texttt{angular.z} is positive when you are on the robot's left.
+\item \textbf{Check the field of view.} Note the bearing at which detections
+  stop at the frame edges; about \SI{21}{\degree} confirms the cropped preview
+  (\S\ref{sec:previewcrop}).
+\item \textbf{Wheels lifted, armed.} Launch with \texttt{dry\_run:=false},
+  hold R2, and check that the wheels turn the right way as a person moves.
+\item \textbf{On the floor with a person.} Check turning on the actual floor
+  (the stall described above), the follow distance and the stop.
+\item \textbf{With the dog.} Only after the above, with \texttt{targets:=[dog]}.
+\end{enumerate}
+
+\section{PROPOSED IMPROVEMENTS}
+\label{sec:chasefuture}
+
+\emph{None of these is implemented.}
+
+\paragraph{Hysteresis on loss.} Decrement the hit counter on a missed frame
+instead of resetting it, and keep commanding the last smoothed bearing until
+the \SI{0.5}{s} loss timeout, so a single dropped detection does not stop the
+robot.
+
+\paragraph{Target filter in the odometry frame.}
+\label{sec:targetkf}
+Today the bearing mixes the target's motion with the robot's own rotation,
+and the track is lost the moment the target leaves the image. Tracking the
+target in \frm{odom} separates the two. With target state
+$\bm s=(p_x,p_y,\dot p_x,\dot p_y)$ and a constant-velocity model,
+\begin{equation}
+\bm s_{k+1}=\begin{bmatrix}I&T I\\0&I\end{bmatrix}\bm s_k+\bm w_k,\qquad
+\bm w_k\sim\mathcal N\!\left(0,\ q\begin{bmatrix}\tfrac{T^3}{3}I&\tfrac{T^2}{2}I\\
+\tfrac{T^2}{2}I&TI\end{bmatrix}\right),
+\end{equation}
+each detection is mapped into \frm{odom} through the camera transform
+\eqref{eq:cam2base} and the robot pose $(x,y,\psi)$,
+\begin{equation}
+\bm z_k=\begin{bmatrix}x\\y\end{bmatrix}+R(\psi)\left(
+\begin{bmatrix}Z\\-X\end{bmatrix}+\bm t_{\mathrm{cam}}\right),
+\qquad
+R_z = J\,\operatorname{diag}\!\bigl(\sigma_\beta^2\rho^2,\ \delta Z^2\bigr)J\T,
+\end{equation}
+where $J$ rotates the bearing/range errors into \frm{odom} and $\delta Z$
+comes from \eqref{eq:depthres}. A standard Kalman filter
+(Chapter~\ref{ch:fusion}) then gives a target position and velocity that
+survive short dropouts, can be extrapolated over the detection delay, and
+can steer the robot back toward where the target left the image.
+
+\paragraph{Search.} When the target has been lost for longer than a few
+seconds, turn slowly in place toward its last known side. This needs reliable
+turning first (\S\ref{sec:yawloop}).
+
+\paragraph{Obstacle gating.} Limit forward speed from the lidar's closest
+return $d$ in a sector ahead of the robot,
+$v\le\sqrt{2a_b\,\max(0,d-d_s)}$, with a braking deceleration $a_b$ and a
+safety distance $d_s$, so the robot can always stop before an obstacle. A
+full alternative is to send the target position as a \texttt{move\_base}
+goal once navigation is set up.
+
+\paragraph{Faster detector input.} Running the camera at 15--20 fps
+reduces the delay and allows a higher $k_\beta$ for the same margin, at
+the cost of more camera power.

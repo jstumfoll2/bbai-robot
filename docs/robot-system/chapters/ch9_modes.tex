@@ -88,7 +88,7 @@ Bluetooth controller & Motors receive no commands; the \SI{0.5}{s} timeout
   publishes only the preview topic; nothing moves.
 \item[Chase, armed.] \texttt{chase.launch dry\_run:=false}. Holding R2 (with
   L1 released) lets the chase node drive toward the target. Waiting on
-  separate camera power (\S\ref{sec:power}).
+  separate camera power (\S\ref{sec:powerbudget}).
 \item[Calibration.] \texttt{rosrun bbai\_base mag\_calibrate.py} drives
   \topic{/cmd\_vel} itself to spin two turns. \texttt{motor\_map\_test.py}
   drives each motor in turn and must be run with \texttt{robot.launch}

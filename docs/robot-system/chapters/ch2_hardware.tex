@@ -262,8 +262,10 @@ about \SI{15}{fps} for RGB plus depth. MobileNet-SSD runs on the camera's
 Myriad X and detects the dog at 93--99\% confidence, about 10 detections per
 second. The camera's EEPROM calibration was found blank; it was
 self-calibrated on the PC with depthai~v2 tools and flashed on 2026-10-01
-(stereo reprojection error 0.35, baseline \SI{7.43}{cm}). The procedure is in
+(epipolar error 0.36, baseline \SI{7.43}{cm}). The procedure is in
 \file{docs/CALIBRATION.md} and the backup is in \file{camera/pc-tools/}.
+Chapter~\ref{ch:camera} covers the camera's geometry, depth and
+calibration in detail.
 
 \section{POWER}
 \label{sec:power}
@@ -282,3 +284,4 @@ The conclusion is that the cape's \SI{5}{V} rail, which feeds the BeagleBone
 and its USB port, drops out when the camera (\SIrange{1}{1.5}{A}), motors,
 lidar and Bluetooth all run together. The fix in progress is to power the
 camera from a separate battery bank through a USB splitter cable.
+The load estimate behind this is in \S\ref{sec:powerbudget}.
