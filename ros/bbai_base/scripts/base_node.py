@@ -95,6 +95,15 @@ class BaseNode(object):
         self.max_duty = float(p("~max_duty", 0.6))
         self.min_duty = float(p("~min_duty", 0.0))  # overcome motor deadband
         self.cmd_timeout = float(p("~cmd_timeout", 0.5))
+        # Closed-loop wheel speed (per side): feedforward duty + PI on encoder speed,
+        # so slow commands still move the robot on carpet and fast ones aren't overshot
+        self.speed_control = p("~speed_control", True)
+        self.kp = float(p("~speed_kp", 0.6))       # duty per m/s of error
+        self.ki = float(p("~speed_ki", 1.5))       # duty per m of accumulated error
+        self.speed_tau = float(p("~speed_tau", 0.15))  # s, encoder speed filter
+        self.ref = [0.0, 0.0]
+        self.meas = [0.0, 0.0]
+        self.integ = [0.0, 0.0]
         self.motor = None
         if self.left_motors or self.right_motors:
             start_motor_dir_pru()
@@ -119,25 +128,53 @@ class BaseNode(object):
         self.last_l, self.last_r = self.read_ticks()
         self.last_t = rospy.Time.now()
 
-    def set_side(self, channels, speed):
+    def ff_duty(self, speed):
         duty = speed / self.max_wheel_speed
         if abs(duty) > 1e-3:
-            duty = math.copysign(self.min_duty + (1.0 - self.min_duty) * abs(duty), duty)
-        else:
-            duty = 0.0
+            return math.copysign(self.min_duty + (1.0 - self.min_duty) * abs(duty), duty)
+        return 0.0
+
+    def apply_duty(self, channels, duty):
         duty = max(-self.max_duty, min(self.max_duty, duty))
         for ch in channels:
             self.motor.set(ch, self.motor_signs.get(ch, 1) * duty)
+        return duty
+
+    def set_side(self, channels, speed):
+        self.apply_duty(channels, self.ff_duty(speed))
 
     def stop_motors(self):
         for ch in self.left_motors + self.right_motors:
             self.motor.set(ch, 0.0)
+        self.ref = [0.0, 0.0]
+        self.integ = [0.0, 0.0]
+
+    def speed_loop(self, dt):
+        """PI speed control per side, run every odometry step."""
+        if self.last_cmd_time is None:
+            return
+        for i, chans in enumerate((self.left_motors, self.right_motors)):
+            ref = self.ref[i]
+            if abs(ref) < 1e-3:
+                self.integ[i] = 0.0
+                self.apply_duty(chans, 0.0)
+                continue
+            err = ref - self.meas[i]
+            ff = self.ff_duty(ref)
+            duty = ff + self.kp * err + self.ki * (self.integ[i] + err * dt)
+            applied = self.apply_duty(chans, duty)
+            if applied == duty:  # anti-windup: only integrate when not saturated
+                self.integ[i] += err * dt
 
     def on_cmd_vel(self, msg):
         v, w = msg.linear.x, msg.angular.z
-        self.set_side(self.left_motors, v - w * self.cmd_turn_track / 2.0)
-        self.set_side(self.right_motors, v + w * self.cmd_turn_track / 2.0)
+        vl, vr = v - w * self.cmd_turn_track / 2.0, v + w * self.cmd_turn_track / 2.0
         self.last_cmd_time = time.time()
+        if self.speed_control:
+            self.ref = [vl, vr]  # applied by speed_loop() in the control step
+        else:
+            self.set_side(self.left_motors, vl)
+            self.set_side(self.right_motors, vr)
 
     def side_ticks(self, chs):
         return sum(self.signs.get(ch, 1) * encoder.get(ch) for ch in chs) / float(len(chs))
@@ -172,6 +209,11 @@ class BaseNode(object):
         dl = (l - self.last_l) * self.m_per_count
         dr = (r - self.last_r) * self.m_per_count
         self.last_l, self.last_r = l, r
+        a = min(1.0, dt / self.speed_tau)
+        self.meas[0] += a * (dl / dt - self.meas[0])
+        self.meas[1] += a * (dr / dt - self.meas[1])
+        if self.motor and self.speed_control:
+            self.speed_loop(dt)
 
         d = (dl + dr) / 2.0
         if dl or dr or (self.last_cmd_time is not None):

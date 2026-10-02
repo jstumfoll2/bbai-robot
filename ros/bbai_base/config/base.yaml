@@ -11,7 +11,7 @@ counts_per_rev: 15.0
 # Robot geometry in meters (4-wheel skid steer, axle spacing 0.101 m)
 wheel_radius: 0.0396   # 79.2 mm wheels
 track_width: 0.120     # left-right wheel centers; only used if use_gyro_heading is false
-cmd_turn_track: 0.46   # effective skid-steer track for /cmd_vel turns (5.0 rad/s at 0.12 m gave 1.31 rad/s)
+cmd_turn_track: 0.33   # effective skid-steer track for /cmd_vel turns with wheel speed control (tested 0.26 and 0.46)
 use_gyro_heading: true
 publish_tf: true
 rate: 30.0
@@ -31,3 +31,8 @@ mag_offset_x: 11.71    # uT, hard-iron offset
 mag_offset_y: 66.61
 mag_sign: 1
 declination_deg: 2.5   # magnetic declination, east positive (WMM estimate for home, 2026)
+# Closed-loop wheel speed (PI on encoder speed, per side)
+speed_control: true
+speed_kp: 0.6
+speed_ki: 1.5
+speed_tau: 0.15
