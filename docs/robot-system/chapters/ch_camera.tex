@@ -196,17 +196,20 @@ crop \SI{39}{\degree}; the datasheet and calibration differ by a few degrees.) T
 \item A dog at the edge of the colour frame, outside the central
   \SI{42}{\degree}, is not seen by the network at all. The detector's field
   of view is narrower than the camera's.
-\item The chase node's fallback bearing $(c_x-\frac12)\,\theta_h$ uses
-  \texttt{rgb\_hfov\_deg} $=68.8$. If the preview is cropped, the fallback
-  bearing is about 60\% too large. The depth-based bearing
-  $\atantwo(X,Z)$ is unaffected because DepthAI maps the ROI back to the
-  aligned depth frame with the correct geometry.
+\item The chase node's original fallback bearing used
+  \texttt{rgb\_hfov\_deg} $=68.8$ for the preview, which made it about 75\%
+  too large. The depth-based bearing $\atantwo(X,Z)$ is unaffected because
+  DepthAI maps the ROI back to the aligned depth frame with the correct
+  geometry.
 \end{itemize}
-\influx{The crop has not been checked on the robot. Saving one preview frame
-next to a full-resolution still will settle it; if confirmed, set
-\texttt{rgb\_hfov\_deg} to 42, or call
-\texttt{setPreviewKeepAspectRatio(False)} to give the network the full width
-at the cost of a horizontally squashed image.}
+PR~\#3 sets \texttt{setPreviewKeepAspectRatio} explicitly from a
+\texttt{preview\_keep\_aspect} parameter (default true: centre crop) and
+computes the preview's field of view at start-up from the RGB intrinsics in
+the camera's calibration, $\theta_p=2\arctan\bigl(w/(2f_x)\bigr)$ with
+$w=1080$ for the crop or 1920 for the full width: about \SI{39}{\degree} with
+this unit's calibration. Setting \texttt{preview\_keep\_aspect} false gives the
+network the full width at the cost of a horizontally squashed image.
+\influx{Implemented in PR~\#3 but not yet run on the robot.}
 
 \section{CALIBRATION}
 \label{sec:oakcal}

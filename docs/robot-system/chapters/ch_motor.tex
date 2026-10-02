@@ -156,6 +156,7 @@ Gyro bias (ZUPT) & \SI{30}{Hz} while still & \texttt{bbai\_base} & Tracks the gy
 Heading & \SI{30}{Hz} & \texttt{bbai\_base} & Complementary gyro--compass filter (\S\ref{sec:compfilt}). \\
 Teleop & \SI{20}{Hz} idle, up to \SI{100}{Hz} & \texttt{bbai\_teleop} & Human in the loop. \\
 Chase & \SI{15}{Hz} & \texttt{bbai\_chase} & Bearing and range to a detected dog or person (Chapter~\ref{ch:chase}). \\
+Chase yaw rate & \SI{15}{Hz} & \texttt{bbai\_chase} & Gyro PI loop on the requested turn rate (\S\ref{sec:chaseyaw}; PR~\#3, untested). \\
 Detection & about \SI{10}{Hz} & OAK-D-Lite & Runs on the camera; feeds the chase loop. \\
 Global EKF & \SI{20}{Hz} & \texttt{ekf\_gps} & Fuses odometry, IMU yaw and GPS (Chapter~\ref{ch:fusion}). \\
 SLAM & per scan (\SIrange{5}{7}{Hz}) & gmapping / hector & Scan matching against the map (Chapter~\ref{ch:slam}). \\
@@ -257,9 +258,10 @@ somewhat faster than it. The integrator $J$ learns the floor-dependent
 $\chi$; it should be frozen whenever $\abs{\omega^\ast}$ is small, so it does
 not fight the straight-line drift that the heading estimate already handles.
 
-This is also the right fix for the chase controller's turn command
-(Chapter~\ref{ch:chase}): it asks for a yaw rate, and today whether it gets
-that yaw rate depends on the floor.
+The chase node now implements a simpler form of this loop for its own turn
+commands, as a PI correction on $\omega$ ahead of the base node
+(\S\ref{sec:chaseyaw}, PR~\#3, untested). Moving it into the base would
+give teleop the same benefit.
 
 \section{IMPLEMENTATION NOTES}
 

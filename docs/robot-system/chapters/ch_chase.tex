@@ -9,7 +9,9 @@ stability, how it shares the motors with teleop, and the plan for bringing it
 up on the robot. \S\ref{sec:chase} gives a short summary of the ROS node.
 
 \influx{Chase has only been run in dry-run mode, where it computes commands
-but never sends them to the motors. It is waiting on the camera's separate
+but never sends them to the motors. The gyro yaw-rate loop and
+gyro-stabilized bearing of \S\ref{sec:chaseyaw} are implemented (PR~\#3,
+branch \texttt{claude/project-thread-j4pg3h}) but not yet tested on the robot. It is waiting on the camera's separate
 power supply (\S\ref{sec:powerbudget}).}
 
 \section{PIPELINE}
@@ -128,23 +130,34 @@ Each time a new detection frame arrives (about \SI{10}{Hz}) the node:
 \begin{equation}\label{eq:chasemeas}
 (\beta_m,\rho_m)=\begin{cases}
 \bigl(\atantwo(X,Z),\ \sqrt{X^2+Z^2}\bigr) & Z>\SI{0.05}{m},\\[2pt]
-\bigl((\bar u-\tfrac12)\,\theta_h,\ \text{unknown}\bigr) & \text{otherwise},
+\Bigl(\arctan\bigl[(2\bar u-1)\tan\tfrac{\theta_p}{2}\bigr],\ \text{unknown}\Bigr) & \text{otherwise},
 \end{cases}
 \end{equation}
-  with $\beta$ positive to the right and $\theta_h$ the parameter
-  \texttt{rgb\_hfov\_deg} (see \S\ref{sec:previewcrop} on its value);
+  with $\beta$ positive to the right and $\theta_p$ the preview's horizontal
+  field of view, computed at start-up from the camera's RGB calibration
+  (\S\ref{sec:previewcrop}). The fallback is the exact pinhole bearing
+  \eqref{eq:backproject}, not a linear approximation;
+\item converts the bearing to a room-fixed \emph{azimuth} by subtracting the
+  gyro yaw $\psi_g$ at the moment the frame was captured (the detection time
+  minus an assumed \SI{0.15}{s} camera latency),
+\begin{equation}\label{eq:azimuth}
+\alpha_m=\beta_m-\psi_g(t_{\mathrm{det}}-\SI{0.15}{s}),
+\end{equation}
+  so that the robot's own turning does not change the stored target;
 \item smooths both with an exponential moving average (EMA) of weight $a=0.5$
   on the new sample,
 \begin{equation}\label{eq:ema}
-\hat\beta_k = a\beta_{m,k}+(1-a)\hat\beta_{k-1},
+\hat\alpha_k = a\alpha_{m,k}+(1-a)\hat\alpha_{k-1},
 \end{equation}
   and the same for $\rho$ (a missing range keeps the previous one);
 \item counts consecutive frames with a target, $h$. A frame with no target
   resets $h$ to 0, and the next detection restarts the EMA from the raw
   measurement.
 \end{enumerate}
-The node publishes the smoothed target as a point on \topic{/chase/target}
-in the camera frame.
+Between frames the current bearing is recovered from the stored azimuth and
+the latest gyro yaw, $\hat\beta=\hat\alpha+\psi_g(t)$, which updates at the
+IMU rate rather than the detection rate. The node publishes the target as a
+point on \topic{/chase/target} in the camera frame.
 
 \paragraph{The EMA as a filter.} With samples every $T=\SI{0.1}{s}$,
 \eqref{eq:ema} is the discretization of a first-order low-pass filter with
@@ -221,6 +234,10 @@ $\rho_{\mathrm{stop}}$ & \texttt{stop\_distance} & \SI{0.5}{m} & no forward moti
 $a$ & \texttt{smoothing} & 0.5 & EMA weight \\
  & \texttt{min\_hits}, \texttt{lost\_timeout} & 3, \SI{0.5}{s} & debounce and loss \\
  & \texttt{rate}, \texttt{fps} & \SI{15}{Hz}, 10 & control and camera rates \\
+$k_p$, $k_i$ & \texttt{yaw\_kp}, \texttt{yaw\_ki} & 1, \SI{8}{s^{-1}} & yaw-rate loop gains (PR~\#3) \\
+$\omega_c$ & \texttt{max\_turn\_cmd} & \SI{8}{rad/s} & turn command limit, duty about 0.47 \\
+ & \texttt{min\_spin\_cmd}, \texttt{gyro\_timeout} & \SI{4}{rad/s}, \SI{0.3}{s} & open-loop fallback without gyro \\
+ & \texttt{camera\_latency} & \SI{0.15}{s} & capture-to-host delay for \eqref{eq:azimuth} \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -274,18 +291,56 @@ $k_\beta=6$ & \SI{13}{\degree} & unstable & unstable \\
 \paragraph{Will the robot actually turn?} The bearing loop assumes the
 robot turns at the commanded rate, and on this robot it does not
 (\S\ref{sec:skidturn}). The detector only sees the central part of the
-colour frame, about $\pm\SI{21}{\degree}$ if the preview is cropped
-(\S\ref{sec:previewcrop}), so the largest command chase will ever send is
-$2.5\times0.37\approx\SI{0.92}{rad/s}$, and even the \SI{2}{rad/s} limit maps
-through \eqref{eq:sidespeed}--\eqref{eq:duty} to a duty of only 0.16--0.21.
-Teleop's old \SI{1.5}{rad/s} full stick (duty 0.19) could not start a spin
-on the floor. Chase will therefore very likely stall on turns: the motors
-form a dead zone in the loop, the bearing error sits there, and nothing
-happens until $v$ (which is held near zero by the bearing factor) or a
-nudge breaks it free. The fix belongs below the chase node, in the yaw-rate
-loop of \S\ref{sec:yawloop}, so that a commanded rate is delivered on any
-floor; until then a larger turning duty floor in \texttt{bbai\_base} for
-spins in place is the quick workaround.
+colour frame, about $\pm\SI{20}{\degree}$ (\S\ref{sec:previewcrop}), so the
+largest rate chase requests is about $2.5\times0.35\approx\SI{0.9}{rad/s}$,
+and even the \SI{2}{rad/s} limit maps through
+\eqref{eq:sidespeed}--\eqref{eq:duty} to a duty of only 0.16--0.21. Teleop's
+old \SI{1.5}{rad/s} full stick (duty 0.19) could not start a spin on the
+floor. Sent open loop, chase turns would stall: the motors form a dead zone
+in the loop and the bearing error would sit there. Raising $k_\beta$ is not
+the answer (Table~\ref{tab:chasepm}). \S\ref{sec:chaseyaw} describes the fix.
+
+\subsection{Yaw-rate loop and gyro-stabilized bearing}
+\label{sec:chaseyaw}
+
+\emph{Implemented in PR~\#3, not yet tested on the robot.} The chase node
+closes a yaw-rate loop of its own on the bias-corrected gyro $z$ rate
+$\omega_g$ from \topic{/imu/data\_raw}, leaving \texttt{bbai\_base}
+unchanged. The bearing law \eqref{eq:chasew} now produces a requested rate
+$\omega^\ast$, and the node sends
+\begin{equation}\label{eq:chaseyaw}
+\omega_{\mathrm{cmd}}=\sat_{\omega_{c}}\!\Bigl(\omega^\ast+k_p(\omega^\ast-\omega_g)+I\Bigr),
+\qquad
+I_{k+1}=I_k+k_i\,\Delta t\,(\omega^\ast-\omega_g),
+\end{equation}
+with $k_p=1$, $k_i=\SI{8}{s^{-1}}$ and output limit
+$\omega_c=\SI{8}{rad/s}$, which by \eqref{eq:sidespeed}--\eqref{eq:duty} is a
+duty of about 0.47. The feed-forward term passes $\omega^\ast$ straight
+through; the integrator supplies the extra command a skid-steer turn needs
+\eqref{eq:spinforce}: while the robot is stuck, $\omega_g\approx0$ and $I$
+grows at $k_i\omega^\ast$, so a \SI{0.9}{rad/s} request reaches the limit in
+about a second. Once the tyres break free, $\omega_g$ catches up and $I$
+settles at whatever the floor needs. Safeguards:
+\begin{itemize}
+\item \emph{Anti-windup:} $I$ stops integrating while the output is
+  saturated in the direction of the error, and is clamped so it only ever adds
+  effort in the requested direction.
+\item \emph{Resets:} $I$ is cleared when no turn is requested, when the turn
+  direction flips, and whenever chase is not armed.
+\item \emph{Gyro loss:} if the gyro is more than \SI{0.3}{s} old, the loop
+  falls back to open loop with a minimum spin command of \SI{4}{rad/s}
+  (duty about 0.3).
+\end{itemize}
+This is the yaw-rate loop of \S\ref{sec:yawloop}, implemented in the chase
+node rather than the base, so it helps chase only; teleop is unaffected.
+
+\paragraph{Effect on the bearing loop.} With the azimuth form
+\eqref{eq:azimuth}, the robot's own rotation reaches the bearing through
+the gyro, with a delay of a few tens of milliseconds, instead of through the
+camera's \SI{0.2}{s}. The delay analysis above then applies only to the
+target's own motion, and the margin for the robot's rotation is much larger.
+The accuracy of the gyro-integrated yaw over the few seconds of a chase is
+far better than the detector's bearing noise.
 
 \subsection{Range loop}
 
@@ -337,7 +392,7 @@ Once the camera runs from the battery bank through the USB splitter:
   chase. Walk across the field of view and check that the sign of
   \texttt{angular.z} is positive when you are on the robot's left.
 \item \textbf{Check the field of view.} Note the bearing at which detections
-  stop at the frame edges; about \SI{21}{\degree} confirms the cropped preview
+  stop at the frame edges; about \SI{20}{\degree} confirms the cropped preview
   (\S\ref{sec:previewcrop}).
 \item \textbf{Wheels lifted, armed.} Launch with \texttt{dry\_run:=false},
   hold R2, and check that the wheels turn the right way as a person moves.
@@ -349,7 +404,7 @@ Once the camera runs from the battery bank through the USB splitter:
 \section{PROPOSED IMPROVEMENTS}
 \label{sec:chasefuture}
 
-\emph{None of these is implemented.}
+\emph{None of these is implemented yet.}
 
 \paragraph{Hysteresis on loss.} Decrement the hit counter on a missed frame
 instead of resetting it, and keep commanding the last smoothed bearing until
@@ -382,8 +437,8 @@ survive short dropouts, can be extrapolated over the detection delay, and
 can steer the robot back toward where the target left the image.
 
 \paragraph{Search.} When the target has been lost for longer than a few
-seconds, turn slowly in place toward its last known side. This needs reliable
-turning first (\S\ref{sec:yawloop}).
+seconds, turn slowly in place toward its last known azimuth. The yaw-rate
+loop of \S\ref{sec:chaseyaw} makes slow turns possible.
 
 \paragraph{Obstacle gating.} Limit forward speed from the lidar's closest
 return $d$ in a sector ahead of the robot,

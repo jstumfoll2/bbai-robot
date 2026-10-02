@@ -25,13 +25,12 @@
 \item[Repository behind the robot.] The compass, ZUPT, GPS fusion and gmapping
   changes are on \texttt{slam-estimator-updates}, not \texttt{main}. The
   teleop turn curve is only on the board.
-\item[Chase turning will likely stall.] Chase never asks for more than about
-  0.2 duty to turn, below what a spin on the floor needs
-  (\S\ref{sec:chaselaw}).
-\item[Detector field of view unverified.] The $300\times300$ preview is
-  probably a centre crop of the colour frame, about \SI{42}{\degree} wide
-  rather than \SI{69}{\degree}, which would make the chase fallback bearing
-  too large (\S\ref{sec:previewcrop}).
+\item[Chase turning and field of view.] Open-loop chase turns asked for
+  only about 0.2 duty, and the fallback bearing assumed a \SI{69}{\degree}
+  view where the detector sees about \SI{39}{\degree}. PR~\#3 adds a gyro
+  yaw-rate loop and computes the view from the calibration
+  (\S\ref{sec:chaseyaw}, \S\ref{sec:previewcrop}); not yet tested on the
+  robot.
 \item[Chase stops on one missed frame.] A single missed detection resets the
   hit counter (\S\ref{sec:chasemeas}).
 \item[No camera transform.] No static transform for the OAK-D-Lite is
