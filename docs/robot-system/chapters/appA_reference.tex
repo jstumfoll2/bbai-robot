@@ -33,7 +33,7 @@ The day-to-day commands for the board, laptop, PC and controller are in
 
 \begin{table}[htbp]
 \centering
-\caption{\texttt{base.yaml} (branch \texttt{slam-estimator-updates})}
+\caption{\texttt{base.yaml}}
 \small
 \begin{tabularx}{\linewidth}{>{\ttfamily}l>{\ttfamily}lX}
 \toprule
@@ -43,7 +43,8 @@ left\_encoders, right\_encoders & [1, 3], [2, 4] & encoder channels per side \\
 encoder\_signs & \{1:1, 2:-1, 3:1, 4:-1\} & forward counts up \\
 counts\_per\_rev & 15.0 & from the \SI{3}{ft} push \\
 wheel\_radius & 0.0396 & m \\
-track\_width & 0.120 & m; used only for encoder heading and duty split \\
+track\_width & 0.120 & m; geometric track, used for encoder heading \\
+cmd\_turn\_track & 0.46 & m; effective track for \topic{/cmd\_vel} turns \eqref{eq:chicmd} \\
 use\_gyro\_heading & true & heading from the gyroscope \\
 publish\_tf & true & publish \frm{odom}$\to$\frm{base\_link} \\
 rate & 30.0 & Hz \\

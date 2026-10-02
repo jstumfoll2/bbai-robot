@@ -8,9 +8,8 @@
   the camera, motors, lidar and Bluetooth all running (\S\ref{sec:powerbudget}).
   Waiting on a USB splitter and battery bank to power the camera separately.
 \item[SLAM loses track while driving.] Analysis in \S\ref{sec:slamdiag}. The
-  parked drift is fixed on branch \texttt{slam-estimator-updates}; the lidar was
-  found mounted backward and its transform now has a \SI{180}{\degree} yaw
-  (same branch). Longer mapping runs are still to be tested.
+  parked drift is fixed, and the lidar was found mounted backward; its
+  transform now has a \SI{180}{\degree} yaw. Longer mapping runs are still to be tested.
 \item[Skid-steer turning.] Low turn commands cannot overcome scrubbing friction
   (\S\ref{sec:skidturn}). The teleop curve is a workaround; closed-loop
   wheel-speed control would fix it properly.
@@ -22,12 +21,11 @@
 \item[Constant odometry covariance.] \topic{/odom} reports a fixed pose
   covariance (\S\ref{sec:odom}). Harmless for the current EKF, which fuses
   only $v_x$, but wrong for any consumer of the pose.
-\item[Repository behind the robot.] The compass, ZUPT, GPS fusion and gmapping
-  changes are on \texttt{slam-estimator-updates}, not \texttt{main}. The
-  teleop turn curve is only on the board.
+\item[Repository behind the robot.] The teleop turn curve is only on the
+  board.
 \item[Chase turning and field of view.] Open-loop chase turns asked for
   only about 0.2 duty, and the fallback bearing assumed a \SI{69}{\degree}
-  view where the detector sees about \SI{39}{\degree}. PR~\#3 adds a gyro
+  view where the detector sees about \SI{39}{\degree}. PR~\#3 (merged) adds a gyro
   yaw-rate loop and computes the view from the calibration
   (\S\ref{sec:chaseyaw}, \S\ref{sec:previewcrop}); not yet tested on the
   robot.

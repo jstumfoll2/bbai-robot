@@ -187,9 +187,8 @@ wider (\S\ref{sec:skid}). The ratio gives the effective track directly,
 now the \texttt{cmd\_turn\_track} parameter in \file{base.yaml}, so that
 \topic{/cmd\_vel}'s $\omega$ approximately equals the real yaw rate on that
 floor. Odometry is unaffected: it still takes heading from the gyro.
-\influx{\texttt{cmd\_turn\_track} is on branch \texttt{slam-estimator-updates}
-(commit 2d2a56d), not yet on \texttt{main}. It was measured on one floor;
-carpet and hard floor will differ.}
+\influx{\texttt{cmd\_turn\_track} was measured on one floor; carpet and hard
+floor will differ.}
 
 The offset $d_{\min}$ is a deadzone
 compensator: below about 8\% duty the wheels do not turn at all (lifted
