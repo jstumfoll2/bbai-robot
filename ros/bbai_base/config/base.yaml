@@ -24,3 +24,9 @@ max_wheel_speed: 1.2
 max_duty: 0.6          # caps speed at ~0.7 m/s
 min_duty: 0.12         # wheels don't turn below ~8% duty; any nonzero command starts here
 cmd_timeout: 0.5       # stop motors if /cmd_vel goes quiet this long (s)
+# Compass (scripts/mag_calibrate.py spin, 2026-10-01: compass 745 deg vs gyro 724 deg over two turns)
+mag_heading: true
+mag_offset_x: 11.71    # uT, hard-iron offset
+mag_offset_y: 66.61
+mag_sign: 1
+declination_deg: 2.5   # magnetic declination, east positive (WMM estimate for home, 2026)

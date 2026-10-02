@@ -5,7 +5,7 @@
 
   <include if="$(arg lidar)" file="$(find rplidar_ros)/launch/rplidar.launch"/>
 
-  <node pkg="bbai_base" type="base_node.py" name="bbai_base" output="screen" respawn="true" respawn_delay="2">
+  <node pkg="bbai_base" type="base_node.py" name="bbai_base" output="screen" respawn="true" respawn_delay="5">
     <rosparam file="$(find bbai_base)/config/base.yaml" command="load"/>
   </node>
 
