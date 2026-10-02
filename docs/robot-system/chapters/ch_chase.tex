@@ -10,8 +10,7 @@ up on the robot. \S\ref{sec:chase} gives a short summary of the ROS node.
 
 \influx{Chase has only been run in dry-run mode, where it computes commands
 but never sends them to the motors. The gyro yaw-rate loop and
-gyro-stabilized bearing of \S\ref{sec:chaseyaw} are implemented (PR~\#3,
-branch \texttt{claude/project-thread-j4pg3h}) but not yet tested on the robot. It is waiting on the camera's separate
+gyro-stabilized bearing of \S\ref{sec:chaseyaw} are implemented (merged in PR~\#3) but not yet tested on the robot. It is waiting on the camera's separate
 power supply (\S\ref{sec:powerbudget}).}
 
 \section{PIPELINE}
@@ -304,7 +303,7 @@ the answer (Table~\ref{tab:chasepm}). \S\ref{sec:chaseyaw} describes the fix.
 \subsection{Yaw-rate loop and gyro-stabilized bearing}
 \label{sec:chaseyaw}
 
-\emph{Implemented in PR~\#3, not yet tested on the robot.} The chase node
+\emph{Implemented (PR~\#3), not yet tested on the robot.} The chase node
 closes a yaw-rate loop of its own on the bias-corrected gyro $z$ rate
 $\omega_g$ from \topic{/imu/data\_raw}, leaving \texttt{bbai\_base}
 unchanged. The bearing law \eqref{eq:chasew} now produces a requested rate
