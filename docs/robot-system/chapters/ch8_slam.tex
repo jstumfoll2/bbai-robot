@@ -119,8 +119,7 @@ Parameter & 1 Oct & 2 Oct & Effect \\
 \end{tabular}
 \end{table}
 
-\influx{The 2 October values are on branch \texttt{slam-estimator-updates}
-and were being tested when this was written.}
+\influx{The 2 October values were still being tested when this was written.}
 
 \section{HECTOR MAPPING}
 \label{sec:hector}
@@ -201,7 +200,7 @@ odometry pose. The scan matcher absorbs a small rotation, but with only
 about 360 beams per scan and a cell size of \SI{5}{cm}, its correction is
 imperfect, and the residual is written into the map by \eqref{eq:logodds}.
 Repeated every two seconds this smears the walls into a rotating blur. Two
-changes address it (branch \texttt{slam-estimator-updates}):
+changes address it:
 \texttt{temporalUpdate} $=-1$, so a parked robot adds no scans, and the
 zero-velocity update (\S\ref{sec:zupt}), which removes the heading drift
 while parked. Parked drift measured afterwards was zero.
@@ -245,7 +244,6 @@ and they are best ruled out in order:
   warnings.
 \end{enumerate}
 
-\influx{The yaw fix, the mount test and a \file{reset\_map.sh} that waits for
-the old gmapping node to exit before relaunching are on branch
-\texttt{slam-estimator-updates} (commit 0044110), not yet on \texttt{main}.
-Longer mapping runs have not been tested yet.}
+\influx{Longer mapping runs with the yaw fix have not been tested yet.
+\file{reset\_map.sh} now waits for the old gmapping node to exit before
+relaunching.}
