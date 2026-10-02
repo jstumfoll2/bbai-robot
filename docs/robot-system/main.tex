@@ -1,0 +1,119 @@
+%=======================================================================
+%  BeagleBone AI Robot: System Description and Navigation Algorithms
+%
+%  Build:  make            (or: latexmk -pdf main.tex)
+%  Notation and the sensor-error models follow the author's thesis,
+%  jstumfoll2/twip-dmso, docs/thesis (revision 8).
+%=======================================================================
+\documentclass[11pt,letterpaper,oneside]{report}
+
+%------------------------- packages -----------------------------------
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage[htt]{hyphenat}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{bm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{setspace}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{siunitx}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,calc,backgrounds}
+\usepackage[nottoc]{tocbibind}
+\usepackage[colorlinks=true,linkcolor=black,citecolor=black,urlcolor=blue]{hyperref}
+
+\onehalfspacing
+\setlist{itemsep=2pt,topsep=4pt}
+\sisetup{per-mode=symbol}
+
+%------------------------- theorem-like environments ------------------
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[chapter]
+\newtheorem{assumption}[definition]{Assumption}
+\theoremstyle{remark}
+\newtheorem{remark}[definition]{Remark}
+
+%------------------------- macros -------------------------------------
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\xhat}{\hat{x}}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\newcommand{\abs}[1]{\left\lvert #1 \right\rvert}
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\sat}{\operatorname{sat}}
+\newcommand{\sgn}{\operatorname{sgn}}
+\newcommand{\atantwo}{\operatorname{atan2}}
+\newcommand{\wrap}{\operatorname{wrap}}
+\newcommand{\T}{^{\mathsf T}}
+\newcommand{\frm}[1]{\texttt{#1}}          % ROS frame
+\newcommand{\topic}[1]{\texttt{#1}}        % ROS topic
+\newcommand{\file}[1]{\texttt{#1}}         % repository path
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator*{\argmax}{arg\,max}
+
+% Material that is still changing on the robot. Rendered as a shaded note.
+\definecolor{fluxbg}{RGB}{255,246,220}
+\definecolor{fluxrule}{RGB}{214,150,0}
+\newcommand{\influx}[1]{%
+  \par\noindent\fcolorbox{fluxrule}{fluxbg}{%
+    \parbox{\dimexpr\linewidth-2\fboxsep-2\fboxrule}{\small\textbf{In flux.} #1}}\par}
+
+\lstset{basicstyle=\ttfamily\small,columns=fullflexible,breaklines=true,
+        frame=single,rulecolor=\color{black!30},xleftmargin=4pt,xrightmargin=4pt}
+
+\begin{document}
+
+%------------------------- title --------------------------------------
+\begin{titlepage}
+\centering
+\vspace*{1.2in}
+{\Large\bfseries BEAGLEBONE AI ROBOT\par}
+\vspace{0.15in}
+{\large System Description, ROS Architecture, and\\
+Navigation and Mapping Algorithms\par}
+\vspace{0.6in}
+Jason Stumfoll\par
+\vspace{0.2in}
+{\small Repository: \url{https://github.com/jstumfoll2/bbai-robot}\par}
+\vspace{0.6in}
+State of the robot as of 2 October 2026\par
+\vfill
+{\small\itshape Sections marked \textbf{In flux} describe configuration that was
+being changed while this document was written. The repository is the authority
+for anything that disagrees with this text.\par}
+\end{titlepage}
+
+\tableofcontents
+\listoffigures
+\listoftables
+
+\include{chapters/ch1_overview}
+\include{chapters/ch2_platform}
+\include{chapters/ch2_hardware}
+\include{chapters/ch3_ros}
+\include{chapters/ch4_kinematics}
+\include{chapters/ch_motor}
+\include{chapters/ch5_attitude}
+\include{chapters/ch6_gps}
+\include{chapters/ch7_fusion}
+\include{chapters/ch8_slam}
+\include{chapters/ch_camera}
+\include{chapters/ch_chase}
+\include{chapters/ch9_modes}
+\include{chapters/ch10_issues}
+
+\appendix
+\include{chapters/appA_reference}
+
+\bibliographystyle{ieeetr}
+\bibliography{refs}
+
+\end{document}

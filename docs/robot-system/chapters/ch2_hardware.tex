@@ -1,0 +1,287 @@
+\chapter{HARDWARE BRING-UP}
+\label{ch:hardware}
+
+This chapter records every change that was needed to make each device work on
+the BeagleBone AI. The Robotics Cape was designed for the BeagleBone Black and
+Blue, whose AM335x processor has a different pin multiplexer, different GPIO
+numbering and different peripheral addresses from the AM5729 on the
+BeagleBone AI. Almost every problem in this chapter comes from that mismatch.
+
+\section{OPERATING SYSTEM AND BOOT}
+
+The board runs the 2020-04-06 TI image (Debian~10 Buster, kernel
+\texttt{4.14.108-ti-r136}). Debian~10 is out of support, so
+\texttt{/etc/apt/sources.list} points at \texttt{archive.debian.org} with the
+security line commented out; without that, \texttt{apt} cannot install
+anything (it was needed for \texttt{libatlas-base-dev}, which depthai uses).
+
+The boot configuration is \file{system/uEnv.txt}, installed as
+\texttt{/boot/uEnv.txt}:
+\begin{lstlisting}
+uname_r=4.14.108-ti-r136
+dtb=am5729-beagleboneai-roboticscape.dtb
+cmdline=coherent_pool=1M
+\end{lstlisting}
+The \texttt{dtb=} line makes U-Boot load the custom Robotics Cape device tree
+instead of the stock one. Journald was made persistent
+(\texttt{/var/log/journal}) on 1 October 2026 so that the cause of an
+unexpected reboot survives the reboot.
+
+\section{DEVICE TREE}
+\label{sec:dt}
+
+The device tree is built from \texttt{beagleboard/BeagleBoard-DeviceTrees}
+(branch \texttt{v4.14.x-ti}, commit \texttt{4a9c0a6}) plus
+\file{devicetree/roboticscape-bbai.patch}. The full source files are also
+kept in \file{devicetree/}. Table~\ref{tab:dt} lists every change and why it
+was made.
+
+\begin{table}[htbp]
+\centering
+\caption{Device tree changes on top of upstream}
+\label{tab:dt}
+\small
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{1.9in}X}
+\toprule
+Change & Reason \\
+\midrule
+\texttt{\&hdmi} disabled & HDMI shares pins with cape signals. \\
+\texttt{\&i2c4} enabled on P9.19/P9.20 (mode 7), shared balls set to GPIO
+  input & Cape I$^2$C2 header. The BB-AI routes two SoC balls to each of these
+  header pins, so the unused ball must be parked. \\
+P9.13 muxed to \texttt{pr2\_pru0\_gpo15} (mode 13) & Motor 1 direction~B. The
+  AM335x GPIO this pin used is not available on the AM5729 ball that reaches
+  the header; the only usable function is a PRU output (\S\ref{sec:pru}). \\
+\texttt{PIN\_INPUT\_PULLUP} on all 8 encoder pins (eQEP1A/B, eQEP2A/B,
+  eQEP3A/B, PRU1 gpi16/18) & The A1230 outputs are open-drain and need a
+  pull-up. Without it no encoder counted at all (2026-10-01). \\
+\texttt{\&uart6} enabled & Bluetooth HCI for the BCM43455. It had been
+  commented out in the base \texttt{.dts} in 2022 for an unrecorded reason;
+  re-enabled and tested on 2026-10-01. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The patch also moves the \texttt{epwmss2}/\texttt{ehrpwm2} and UART nodes
+around without changing what they enable, and adds a model string.
+
+\paragraph{Build and install.} On the board (needs \texttt{sudo} and a reboot):
+\begin{lstlisting}
+cd ~/src/BeagleBoard-DeviceTrees && git apply .../roboticscape-bbai.patch
+make src/arm/am5729-beagleboneai-roboticscape.dtb
+sudo cp /boot/dtbs/4.14.108-ti-r136/am5729-beagleboneai-roboticscape.dtb ~/roboticscape.dtb.bak
+sudo cp src/arm/am5729-beagleboneai-roboticscape.dtb /boot/dtbs/4.14.108-ti-r136/
+sudo reboot
+\end{lstlisting}
+The backup in the home folder is the rollback path; the board's eMMC can also
+be repaired from a microSD boot if the new tree does not boot.
+
+\section{SERIAL PORTS}
+
+The cape's UART header names, the AM5729 UART instances and the Linux device
+names do not line up, which caused the lidar to be looked for on the wrong
+port at first. Table~\ref{tab:uarts} gives the confirmed mapping.
+
+\begin{table}[htbp]
+\centering
+\caption{UART assignments (confirmed on the board)}
+\label{tab:uarts}
+\small
+\begin{tabular}{llll}
+\toprule
+Device & Cape header & Linux device & Settings \\
+\midrule
+RPLIDAR A1 & UART1 & \texttt{/dev/ttyS3} (old name \texttt{ttyO3}) & \SI{115200}{baud} \\
+EM-506 GPS & GPS & \texttt{/dev/ttyS2} (SoC UART3) & \SI{4800}{baud} 8N1 \\
+Bluetooth HCI & (on board) & \texttt{/dev/ttyS5} (SoC UART6) & \SI{3}{Mbaud}, RTS/CTS \\
+Debug console & (on board) & \texttt{ttyS0} & \SI{115200}{baud}, PC COM3 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{LIBROBOTCONTROL FORK}
+\label{sec:rclib}
+
+Motors, encoders and the IMU are driven through \texttt{librobotcontrol}
+(used from Python via \texttt{rcpy}). The upstream library supports the
+BeagleBone AI only partially. The fork
+\texttt{jstumfoll2/librobotcontrol}, branch \texttt{v1.1\_AIfixes}, is a
+submodule of this repository and carries two commits on top of upstream
+\texttt{99a08db}: Jason's 2022 work (\texttt{d90e24b}) and the uncommitted
+board changes recovered on 2026-10-01 (\texttt{593182b}). The functional
+changes are:
+\begin{itemize}
+\item \textbf{GPIO numbering} (\texttt{motor.c}). All motor direction pins and
+  the motor standby pin were remapped to AM5729 GPIO banks (for example MDIR1A
+  is \texttt{gpio5\_0}, MOT\_STBY is \texttt{gpio6\_20}). The per-channel
+  polarity table was changed to $\{+1,-1,+1,-1\}$.
+\item \textbf{A virtual GPIO chip for the PRU} (\texttt{gpio.c}). Chip number
+  11 is redirected to the character device \texttt{/dev/rpmsg\_pru32}. Setting
+  a pin on chip 11 writes the ASCII character \texttt{'0'} or \texttt{'1'} to
+  that device instead of issuing a GPIO ioctl. Motor 1's direction~B pin is
+  defined as chip 11, so \texttt{rc\_motor\_init()} fails unless the PRU
+  firmware below is running.
+\item \textbf{eQEP sysfs paths} (\texttt{encoder\_eqep.c}). Updated to the
+  AM5729 addresses (\texttt{4843e000.epwmss} and so on).
+\item \textbf{IMU bus} (\texttt{mpu.c}). The MPU-9250 is on I$^2$C bus 3 with
+  its interrupt on \texttt{gpio5\_17} (P9.25).
+\item \textbf{PRU encoder} (\texttt{encoder\_pru.c}). Encoder channel 4 is
+  counted by firmware on PRU1\_1 (\texttt{am57xx-pru1\_1-rc-encoder-fw-c}),
+  read from PRU shared memory at offset 0.
+\end{itemize}
+
+\section{MOTOR 1 DIRECTION FIRMWARE ON PRU2\_0}
+\label{sec:pru}
+
+The PRU firmware \texttt{gpio\_rpmsg.pru2\_0.c}
+(\file{librobotcontrol/pru\_firmware/customfw/}) is about 100 lines. It opens
+an RPMsg channel named \texttt{rpmsg-pru} on port 32, which the kernel exposes
+as \texttt{/dev/rpmsg\_pru32}. Each message received is parsed with
+\texttt{atoi}; a non-zero value sets bit~15 of the PRU output register
+\texttt{R30} (P9.13), and zero clears it. After each message the firmware
+waits $\num{10200}+\num{4000000}$ PRU cycles, about \SI{20}{ms} at
+\SI{200}{MHz}, so motor 1 can reverse direction at most about 50 times per
+second. That is far faster than any command the robot sends.
+
+The firmware is installed as \texttt{/lib/firmware/am57xx-pru2\_0-fw}. It is
+not started at boot; \texttt{base\_node.py} starts it before initialising the
+motors, equivalent to
+\begin{lstlisting}
+echo am57xx-pru2_0-fw > /sys/class/remoteproc/remoteproc2/firmware
+echo start            > /sys/class/remoteproc/remoteproc2/state
+\end{lstlisting}
+and then waits up to \SI{5}{s} for \texttt{/dev/rpmsg\_pru32} to appear.
+
+\section{WHEEL ENCODERS}
+
+Each wheel has a DAGU 8-pole magnet ring (4 north, 4 south) read by an Allegro
+A1230 dual-channel Hall sensor in quadrature. Two facts from the datasheets
+explained why nothing counted at first:
+\begin{itemize}
+\item The A1230 outputs are open-drain, and the datasheet requires pull-up
+  resistors. The cape has none on these lines, so the internal pull-ups were
+  enabled in the device tree (Table~\ref{tab:dt}).
+\item The A1230 needs at least \SI{3.3}{V}; the cape's encoder headers supply
+  exactly \SI{3.3}{V}, which is in specification but at the bottom of the range.
+\end{itemize}
+
+An 8-pole ring with a quadrature sensor gives $4\times 4 = 16$ edges per
+revolution in principle. A \SI{3}{ft} (\SI{0.914}{m}) push measured about 55
+counts on every wheel, all four within 2 counts of each other, giving
+\num{15.0} counts per revolution, and that value is in \file{base.yaml}.
+
+\begin{table}[htbp]
+\centering
+\caption{Encoder and motor channel mapping (spin and lifted-wheel tests, 2026-10-01)}
+\label{tab:channels}
+\small
+\begin{tabular}{lcccc}
+\toprule
+Wheel & Encoder channel & Counter & Encoder sign & Motor channel \\
+\midrule
+Left back   & 1 & eQEP & $+1$ & M1 \\
+Right back  & 2 & eQEP & $-1$ & M4 \\
+Left front  & 3 & eQEP & $+1$ & M2 \\
+Right front & 4 & PRU1\_1 & $-1$ & M3 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+All four motors drive forward with positive duty (\texttt{motor\_signs} all
+$+1$), after the library's own polarity table. The right-side encoders count
+down when driving forward because they are mounted mirrored, which the
+encoder signs correct.
+
+\section{INERTIAL MEASUREMENT UNIT}
+
+The MPU-9250 is read through \texttt{rcpy.mpu9250} with the magnetometer
+enabled. \texttt{rcpy} returns acceleration in \si{m/s^2}, angular rate in
+\si{\degree/s} and magnetic field in \si{\micro T}; \texttt{base\_node.py}
+converts to SI (\si{rad/s}, \si{T}) before publishing. Relevant datasheet
+values at the default \SI{\pm250}{\degree/s} range are a rate-noise spectral
+density of \SI{0.01}{\degree/s/\sqrt{Hz}}, an initial zero-rate offset of up to
+\SI{\pm5}{\degree/s}, and a zero-rate offset that can move by up to
+\SI{\pm30}{\degree/s} over the full temperature range. The last figure is why
+the gyroscope bias must be measured at every start (\S\ref{sec:gyro}).
+
+The magnetometer read about \SI{150}{\micro T} on the robot, against Earth's
+roughly \SI{50}{\micro T}. The extra field comes from the motor magnets,
+the encoder magnet rings and current in the wiring, which is why it needs the
+calibration in \S\ref{sec:mag}.
+
+\section{LIDAR}
+
+The RPLIDAR A1M8 is wired to the cape's UART1 header and appears as
+\texttt{/dev/ttyS3}. It reports healthy and publishes \topic{/scan} at about
+\SI{7.2}{Hz} through \texttt{rplidar\_ros} (catkin workspace
+\texttt{\textasciitilde/melodic-catkin-ws}). The A1 scans clockwise; the
+driver converts to the counter-clockwise ROS convention.
+
+\section{GPS}
+
+The EM-506 is a SiRF Star IV receiver that outputs NMEA 0183 at
+\SI{4800}{baud} on \texttt{/dev/ttyS2}. Two pieces of software read it:
+\begin{itemize}
+\item \file{gps/libgps-bbai-ttyS2-4800.patch}: a patch to the small C library
+  \texttt{wdalmut/libgps} that changes its port and baud rate. This was the
+  2022 test path.
+\item \file{ros/bbai\_base/scripts/gps\_node.py}: the ROS publisher used now
+  (\S\ref{sec:gpsnode}). It configures the UART itself with \texttt{termios}.
+\end{itemize}
+Indoors the receiver reports no fix; a fix needs open sky.
+
+\section{BLUETOOTH}
+\label{sec:bt}
+
+The on-board BCM43455 Bluetooth controller talks HCI over SoC UART6. Three
+things were needed to bring it up:
+\begin{enumerate}
+\item \texttt{\&uart6} enabled in the device tree (Table~\ref{tab:dt}). It then
+  appears as \texttt{/dev/ttyS5}.
+\item \file{system/blacklist-btsdio.conf} in \texttt{/etc/modprobe.d/}. The
+  \texttt{btsdio} driver otherwise creates a non-working \texttt{hci0} on the
+  SDIO bus, so the real controller would become \texttt{hci1}.
+\item \file{ros/bbai\_teleop/bt-up.sh}, run at boot by
+  \texttt{bbai-bluetooth.service}. It finds the tty whose device is
+  \texttt{48068000.serial}, attaches it with
+  \texttt{hciattach <tty> bcm43xx 3000000 flow} (retrying at \SI{3}{Mbaud} if
+  the chip was already initialised), brings \texttt{hci0} up, disables sniff
+  mode on new links and turns off Wi-Fi power saving. The last two keep the
+  controller's input reports at full rate, because the BCM43455 shares one
+  radio between Wi-Fi and Bluetooth.
+\end{enumerate}
+The PS4 controller is paired once with \file{pair-ps4.sh}, which runs the
+whole \texttt{bluetoothctl} conversation (agent, scan, pair, trust, connect)
+in a single session. The kernel's \texttt{hid-sony} driver then creates
+\texttt{/dev/input/js0}.
+
+\section{OAK-D-LITE CAMERA}
+
+The camera runs with depthai~2.19.1 on the board's Python~3.7 over USB~2, at
+about \SI{15}{fps} for RGB plus depth. MobileNet-SSD runs on the camera's
+Myriad X and detects the dog at 93--99\% confidence, about 10 detections per
+second. The camera's EEPROM calibration was found blank; it was
+self-calibrated on the PC with depthai~v2 tools and flashed on 2026-10-01
+(epipolar error 0.36, baseline \SI{7.43}{cm}). The procedure is in
+\file{docs/CALIBRATION.md} and the backup is in \file{camera/pc-tools/}.
+Chapter~\ref{ch:camera} covers the camera's geometry, depth and
+calibration in detail.
+
+\section{POWER}
+\label{sec:power}
+
+The board reset several times on 1 October 2026. Persistent journald, a
+once-per-second battery logger (\texttt{\textasciitilde/power.log}) and the
+serial console narrowed the cause down:
+\begin{itemize}
+\item The battery input held steady (\SIrange{7.7}{8.2}{V}) through resets.
+\item With the motor driver and lidar stopped, the camera ran detection for
+  \SI{90}{s} with no reset.
+\item The console showed the camera's USB disconnecting and reconnecting
+  immediately before a reset, with no kernel panic.
+\end{itemize}
+The conclusion is that the cape's \SI{5}{V} rail, which feeds the BeagleBone
+and its USB port, drops out when the camera (\SIrange{1}{1.5}{A}), motors,
+lidar and Bluetooth all run together. The fix in progress is to power the
+camera from a separate battery bank through a USB splitter cable.
+The load estimate behind this is in \S\ref{sec:powerbudget}.

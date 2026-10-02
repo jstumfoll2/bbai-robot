@@ -1,0 +1,268 @@
+\chapter{OAK-D-LITE DEPTH CAMERA}
+\label{ch:camera}
+
+The OAK-D-Lite is the robot's only camera and its only sensor that can tell
+a dog from a chair. It is a \emph{stereo} depth camera, not a time-of-flight
+(ToF) camera: it measures depth by matching features between two image
+sensors a known distance apart, rather than by timing emitted light. The
+practical differences are that it needs texture in the scene (a blank wall
+gives no depth), it works outdoors in sunlight where many ToF sensors
+saturate, and its depth error grows with the square of range
+\eqref{eq:depthres} rather than staying roughly constant. This chapter
+describes the hardware, the geometry that turns pixels into metres, the
+on-camera neural network, and the calibration state.
+
+\section{HARDWARE}
+\label{sec:oakhw}
+
+\begin{table}[htbp]
+\centering
+\caption{OAK-D-Lite specifications (Luxonis datasheet)}
+\label{tab:oak}
+\small
+\begin{tabularx}{\linewidth}{lX}
+\toprule
+Item & Specification \\
+\midrule
+Processor & Intel Movidius Myriad X VPU: 16 SHAVE vector cores, neural compute engine, hardware stereo-depth and warp engines; about 4 TOPS total, 1.4 TOPS for neural networks \\
+Colour camera & Sony IMX214, 13 MP (4208$\times$3120), rolling shutter, autofocus (\SI{8}{cm} to infinity), DFOV/HFOV/VFOV \SI{81}{\degree}/\SI{69}{\degree}/\SI{54}{\degree} \\
+Stereo pair & 2$\times$ OmniVision OV7251, 640$\times$480, global shutter, fixed focus, DFOV/HFOV/VFOV \SI{86}{\degree}/\SI{73}{\degree}/\SI{58}{\degree} \\
+Stereo baseline & \SI{75}{mm} nominal; \SI{74.3}{mm} from this unit's calibration \\
+Depth range & about \SI{0.2}{m} (extended disparity) or \SI{0.35}{m} (standard) to over \SI{10}{m}; useful to about \SI{8}{m} \\
+Interface & USB-C, USB~3.2 Gen~1 capable; on the BeagleBone it runs at USB~2 \\
+Power & \SIrange{4}{6}{W} typical at \SI{5}{V}, up to about \SI{1.5}{A} peaks; powered from the USB port only \\
+Size and mass & \SI{91}{mm}$\times$\SI{28}{mm}$\times$\SI{17.5}{mm}, \SI{61}{g} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Table~\ref{tab:oak} gives the specifications. All image processing, stereo
+matching and neural-network inference run on the Myriad~X; the BeagleBone
+receives only detection results (label, confidence, bounding box and 3-D
+position), so the camera adds almost no CPU load to the board. Its cost is
+power: at \SIrange{0.8}{1.5}{A} it is the largest single load on the cape's
+\SI{5}{V} rail (\S\ref{sec:powerbudget}).
+
+\paragraph{Software.} The board runs depthai~2.19.1 for Python~3.7 (the
+newest wheel that installs on the board's Debian). At USB~2 the link carries the detections and a preview
+stream easily; full-resolution video would not fit.
+
+\section{PINHOLE CAMERA MODEL}
+\label{sec:pinhole}
+
+Each sensor is modelled as a pinhole camera with lens distortion removed by
+the calibration. A point $\bm P=(X,Y,Z)$ in the camera frame ($X$ right, $Y$
+down, $Z$ forward along the optical axis) projects to pixel $(u,v)$ by
+\begin{equation}\label{eq:pinhole}
+\begin{bmatrix}u\\v\\1\end{bmatrix}
+= \frac{1}{Z}\,
+\underbrace{\begin{bmatrix}f_x & 0 & c_x\\ 0 & f_y & c_y\\ 0&0&1\end{bmatrix}}_{K}
+\begin{bmatrix}X\\Y\\Z\end{bmatrix},
+\end{equation}
+with focal lengths $f_x,f_y$ in pixels and principal point $(c_x,c_y)$. For
+an image $W$ pixels wide with horizontal field of view $\theta_h$,
+\begin{equation}\label{eq:focal}
+f_x=\frac{W/2}{\tan(\theta_h/2)} .
+\end{equation}
+For the mono cameras at $W=640$ and the datasheet $\theta_h=\SI{73}{\degree}$
+this is $f\approx\SI{432}{px}$; the calibration measured
+$f\approx\SI{450}{px}$ (Table~\ref{tab:oakcal}), and the calibrated value is
+used from here on. Inverting \eqref{eq:pinhole} at a known depth $Z$
+gives the lateral position
+\begin{equation}\label{eq:backproject}
+X=\frac{(u-c_x)\,Z}{f_x},\qquad Y=\frac{(v-c_y)\,Z}{f_y}.
+\end{equation}
+
+\section{STEREO DEPTH}
+\label{sec:stereo}
+
+\paragraph{Rectification.} Using the calibrated intrinsics and the rotation
+and translation between the two mono cameras, the Myriad's warp engine
+remaps both images so that their image planes are coplanar and their rows
+are aligned. After rectification a point appears on the \emph{same row} in
+both images, and the search for its match is one-dimensional along that
+row. The calibration's epipolar error (how far matching points stray from a
+common row) measures how well this worked; this unit's is 0.36~px.
+
+\paragraph{Disparity and depth.} If a point appears at column $u_\ell$ in
+the left image and $u_r$ in the right, its disparity is $d=u_\ell-u_r$, and
+similar triangles give
+\begin{equation}\label{eq:stereo}
+Z=\frac{fB}{d},
+\end{equation}
+with baseline $B=\SI{0.0743}{m}$. On this camera $fB\approx
+450\times0.0743=\SI{33.4}{px.m}$. The matcher is a census-transform cost
+with semi-global aggregation \cite{hirschmuller2008stereo}, run in hardware
+over a search range of 96 disparities (0--95), or 191 with extended
+disparity. The largest disparity sets the minimum depth,
+\begin{equation}
+Z_{\min}=\frac{fB}{d_{\max}}=\frac{33.4}{95}\approx\SI{0.35}{m}
+\quad\text{(standard)},\qquad
+\frac{33.4}{190}\approx\SI{0.18}{m}\quad\text{(extended)}.
+\end{equation}
+The chase pipeline uses the standard range, so a dog closer than about
+\SI{0.35}{m} has no valid depth and falls back to bearing-only
+(\S\ref{sec:chasemeas}). The \SI{0.5}{m} stop distance keeps the robot outside
+that zone.
+
+\paragraph{Depth resolution.} Differentiating \eqref{eq:stereo}, a disparity
+error $\delta d$ gives a depth error
+\begin{equation}\label{eq:depthres}
+\delta Z = \frac{Z^2}{fB}\,\delta d .
+\end{equation}
+Table~\ref{tab:depthres} evaluates it for one whole pixel of disparity. With
+sub-pixel interpolation (3 fractional bits, so steps of $1/8$~px) the
+quantization is eight times finer, though real matching noise is typically
+a few tenths of a pixel.
+
+\begin{table}[htbp]
+\centering
+\caption{Stereo depth resolution, $fB=\SI{33.4}{px.m}$, $\delta d=1$~px}
+\label{tab:depthres}
+\small
+\begin{tabular}{rrr}
+\toprule
+Range $Z$ & Disparity $d$ (px) & $\delta Z$ \\
+\midrule
+\SI{0.5}{m} & 66.8 & \SI{0.007}{m} \\
+\SI{1}{m} & 33.4 & \SI{0.030}{m} \\
+\SI{2}{m} & 16.7 & \SI{0.12}{m} \\
+\SI{3}{m} & 11.1 & \SI{0.27}{m} \\
+\SI{5}{m} & 6.7 & \SI{0.75}{m} \\
+\SI{8}{m} & 4.2 & \SI{1.9}{m} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+At the \SI{0.9}{m} follow distance the range error is a few centimetres; at
+\SI{5}{m} it is most of a metre. The chase controller therefore needs its
+range only to decide how fast to close in, and steers on bearing, which is
+accurate at any range.
+
+\paragraph{Depth aligned to colour.} The chase pipeline sets the stereo
+node's depth alignment to the RGB camera, so each depth pixel is re-projected
+into the colour camera's view: back-projected with \eqref{eq:backproject}
+using the right mono camera's intrinsics, moved by the calibrated
+mono-to-RGB extrinsics, and projected with the RGB intrinsics. The aligned
+depth map is $640\times400$. This lets a bounding box found in the colour
+image index the depth map directly.
+
+\section{SPATIAL DETECTION}
+\label{sec:spatial}
+
+The \texttt{MobileNetSpatialDetectionNetwork} node combines a detector
+running on the colour preview (Chapter~\ref{ch:chase} describes the
+network) with the aligned depth map. For each detection with normalized box
+$[x_{\min},x_{\max}]\times[y_{\min},y_{\max}]$:
+\begin{enumerate}
+\item The box is shrunk about its centre by the \emph{bounding-box scale
+  factor} $s=0.5$ to a region of interest
+  \begin{equation}
+  \mathrm{ROI}=\Bigl[\bar x-\tfrac{s}{2}w,\ \bar x+\tfrac{s}{2}w\Bigr]\times
+               \Bigl[\bar y-\tfrac{s}{2}h,\ \bar y+\tfrac{s}{2}h\Bigr],
+  \end{equation}
+  where $(\bar x,\bar y)$ is the box centre and $w,h$ its size. Shrinking
+  keeps the region on the animal's body and off the background around its
+  outline.
+\item The depth pixels in the ROI that lie inside the thresholds
+  $[\SI{100}{mm},\SI{8000}{mm}]$ are averaged to give $Z$. Pixels with no
+  valid disparity (value 0) are excluded.
+\item The ROI centre $(u,v)$ and $Z$ are back-projected with
+  \eqref{eq:backproject} using the intrinsics of the aligned depth map,
+  giving $(X,Y,Z)$ in millimetres. (DepthAI reports $Y$ positive
+  \emph{up}, the opposite of \eqref{eq:pinhole}; the chase node uses only
+  $X$ and $Z$.)
+\end{enumerate}
+If no pixel in the ROI is valid, $Z=0$ is reported and the chase node falls
+back to a bearing from the box position alone.
+
+\section{IMAGE GEOMETRY OF THE DETECTOR INPUT}
+\label{sec:previewcrop}
+
+The colour camera runs at 1080p ($1920\times1080$) and the network takes a
+$300\times300$ \emph{preview}. With DepthAI's default
+\texttt{setPreviewKeepAspectRatio(True)}, the square preview is made by
+cropping the central $1080\times1080$ of the frame and scaling it, rather
+than squashing the full width. The preview then spans a horizontal field of
+view of
+\begin{equation}\label{eq:cropfov}
+\theta_{\mathrm{prev}}=2\arctan\!\Bigl(\frac{1080}{1920}\tan\frac{\SI{69}{\degree}}{2}\Bigr)
+\approx\SI{42}{\degree},
+\end{equation}
+not the full \SI{69}{\degree}. (With the calibrated RGB focal length,
+$f=\SI{1516}{px}$ at 1080p, the full frame spans \SI{64.7}{\degree} and the
+crop \SI{39}{\degree}; the datasheet and calibration differ by a few degrees.) Two consequences:
+\begin{itemize}
+\item A dog at the edge of the colour frame, outside the central
+  \SI{42}{\degree}, is not seen by the network at all. The detector's field
+  of view is narrower than the camera's.
+\item The chase node's original fallback bearing used
+  \texttt{rgb\_hfov\_deg} $=68.8$ for the preview, which made it about 75\%
+  too large. The depth-based bearing $\atantwo(X,Z)$ is unaffected because
+  DepthAI maps the ROI back to the aligned depth frame with the correct
+  geometry.
+\end{itemize}
+PR~\#3 sets \texttt{setPreviewKeepAspectRatio} explicitly from a
+\texttt{preview\_keep\_aspect} parameter (default true: centre crop) and
+computes the preview's field of view at start-up from the RGB intrinsics in
+the camera's calibration, $\theta_p=2\arctan\bigl(w/(2f_x)\bigr)$ with
+$w=1080$ for the crop or 1920 for the full width: about \SI{39}{\degree} with
+this unit's calibration. Setting \texttt{preview\_keep\_aspect} false gives the
+network the full width at the cost of a horizontally squashed image.
+\influx{Implemented in PR~\#3 but not yet run on the robot.}
+
+\section{CALIBRATION}
+\label{sec:oakcal}
+
+The camera's EEPROM held no calibration when it arrived on the robot, and
+DepthAI refuses to compute depth without one. It was recalibrated on the
+Windows PC with the depthai~v2 calibration tool and a printed ChArUco board,
+then flashed (2026-10-01). Results:
+\begin{itemize}
+\item Left--right epipolar error: 0.36~px, inside the \num{0.5} target in
+  \file{docs/CALIBRATION.md}.
+\item Baseline: \SI{7.43}{cm} against \SI{7.5}{cm} nominal.
+\item RGB lens position (autofocus step at calibration): 72. The RGB camera
+  must be at the same lens position for the RGB--depth alignment to be
+  exact; autofocus moving the lens shifts the RGB intrinsics slightly.
+\end{itemize}
+Table~\ref{tab:oakcal} lists the calibrated intrinsics. The procedure is in
+\file{docs/CALIBRATION.md}, and the calibration file itself is backed up in
+\file{camera/pc-tools/}.
+
+\begin{table}[htbp]
+\centering
+\caption{Calibrated intrinsics (from the flashed calibration file)}
+\label{tab:oakcal}
+\small
+\begin{tabular}{lcccc}
+\toprule
+Camera & Calibrated at & $f_x$, $f_y$ (px) & $(c_x,c_y)$ (px) & Extrinsic translation \\
+\midrule
+RGB (IMX214) & $3840\times2160$ & 3032, 3031 & (1885, 1099) & reference \\
+Left mono & $640\times480$ & 450, 450 & (335, 238) & $x=\SI{-7.43}{cm}$ to right mono \\
+Right mono & $640\times480$ & 453, 452 & (338, 240) & $x=\SI{+3.74}{cm}$ to RGB \\
+\bottomrule
+\end{tabular}
+\end{table}
+\noindent Intrinsics scale with resolution: at 1080p the RGB focal length is
+half the 4K value, \SI{1516}{px}. The PC must use depthai~v2:
+the v3 tools write a calibration format the board's 2.19 library cannot read.
+
+\section{MOUNTING AND FRAMES}
+\label{sec:oakframes}
+
+The camera faces forward on the front of the deck. Its optical frame
+(\frm{oak\_rgb\_camera\_optical\_frame}, $Z$ forward) relates to the robot's
+\frm{base\_link} (REP-103: $x$ forward, $y$ left, $z$ up) by
+\begin{equation}\label{eq:cam2base}
+\begin{bmatrix}x\\y\\z\end{bmatrix}_{\mathrm{base}}
+=\begin{bmatrix}Z\\-X\\-Y\end{bmatrix}_{\mathrm{cam}}
++\bm t_{\mathrm{cam}},
+\end{equation}
+with $\bm t_{\mathrm{cam}}$ the camera's mounting offset. The chase node does
+not use \eqref{eq:cam2base} today: it steers on the bearing in the camera
+frame directly, which is equivalent while the camera sits on the robot's
+centreline and the offset is small compared with the follow distance.
+\influx{No static transform for the camera is published yet. The target
+filter proposed in \S\ref{sec:targetkf} needs one.}

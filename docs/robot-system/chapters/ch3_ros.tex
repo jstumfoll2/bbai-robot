@@ -1,0 +1,312 @@
+\chapter{ROS ARCHITECTURE}
+\label{ch:ros}
+
+\section{NETWORK AND MASTER}
+
+ROS~1 is used throughout: Melodic on the board (built from source into
+\texttt{/opt/ros/melodic}) and Noetic on the laptop. The two are compatible on
+the wire for every message type used here. The board runs the ROS master, so
+the board must be brought up first. Both machines set
+\begin{lstlisting}
+ROS_MASTER_URI=http://192.168.3.120:11311
+ROS_IP=<own address>       # 192.168.3.120 on the board, 192.168.3.147 on the laptop
+\end{lstlisting}
+\texttt{ROS\_IP} matters because ROS nodes advertise their own address to
+the master; without it the laptop would advertise a hostname the board cannot
+resolve. On the laptop the variables are set by
+\file{laptop/bbai\_slam/env.sh}.
+
+\section{PACKAGES AND WORKSPACES}
+
+\begin{table}[htbp]
+\centering
+\caption{Catkin packages}
+\label{tab:pkgs}
+\small
+\begin{tabularx}{\linewidth}{llX}
+\toprule
+Package & Workspace & Contents \\
+\midrule
+\texttt{bbai\_base} & \texttt{\textasciitilde/melodic-catkin-ws} (board) &
+  \texttt{base\_node.py} (motors, encoders, IMU), \texttt{gps\_node.py},
+  \texttt{mag\_calibrate.py}, \texttt{motor\_map\_test.py},
+  \texttt{robot.launch}, \texttt{base.yaml} \\
+\texttt{rplidar\_ros} & \texttt{\textasciitilde/melodic-catkin-ws} (board) &
+  SLAMTEC lidar driver \\
+\texttt{bbai\_teleop} & \texttt{\textasciitilde/teleop\_ws} (board) &
+  \texttt{ps4\_teleop.py}, \texttt{teleop.launch}, Bluetooth scripts \\
+\texttt{bbai\_chase} & \texttt{\textasciitilde/chase\_ws} (board) &
+  \texttt{chase\_node.py}, \texttt{chase.launch} \\
+\texttt{bbai\_slam} (scripts) & \texttt{\textasciitilde/bbai\_slam} (laptop) &
+  gmapping, hector and lidar-only launch files, GPS fusion launch, RViz
+  config, start and reset scripts \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Python~3 workspaces on the board are built with
+\begin{lstlisting}
+catkin_make -DPYTHON_EXECUTABLE=/usr/bin/python3
+\end{lstlisting}
+
+\section{NODES AND TOPICS}
+
+Figure~\ref{fig:rosgraph} shows the computation graph and
+Table~\ref{tab:topics} lists every topic.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  font=\scriptsize,
+  node/.style={draw,ellipse,align=center,fill=blue!6,inner sep=1.5pt,minimum height=7mm},
+  hw/.style={draw,rectangle,align=center,fill=black!5,inner sep=2pt},
+  t/.style={-{Latex[length=1.6mm]},semithick},
+  lab/.style={fill=white,inner sep=0.8pt,font=\tiny\ttfamily}]
+\begin{scope}[on background layer]
+\fill[black!3,rounded corners] (-7.6,-4.2) rectangle (2.0,3.2);
+\fill[green!4,rounded corners] (2.4,-4.2) rectangle (7.8,3.2);
+\end{scope}
+\node[font=\small\bfseries] at (-2.8,2.9) {BeagleBone AI};
+\node[font=\small\bfseries] at (5.1,2.9) {Laptop};
+\node[node] (rp) at (-5.4,2.0) {rplidarNode};
+\node[node] (base) at (-2.4,0.3) {bbai\_base};
+\node[node] (tele) at (-5.6,0.3) {ps4\_teleop};
+\node[hw] (js) at (-5.6,-1.0) {/dev/input/js0};
+\node[node] (gps) at (-3.2,-1.6) {gps};
+\node[node] (chase) at (-0.6,-3.3) {chase};
+\node[hw] (oak) at (-3.6,-3.3) {OAK-D-Lite};
+\node[node] (map) at (5.1,2.0) {slam\_gmapping\\ or hector};
+\node[node] (ekf) at (5.1,-0.3) {ekf\_gps};
+\node[node] (nst) at (5.1,-2.9) {navsat\_transform};
+\draw[t] (rp) -- node[lab,above]{/scan} (map);
+\draw[t] (js) -- (tele);
+\draw[t] (tele) -- node[lab,above]{/cmd\_vel} (base);
+\draw[t] (tele.south east) to[bend right=25] node[lab,pos=0.55]{/joy} (chase.west);
+\draw[t,dashed] (chase.north) to[bend right=15] node[lab,pos=0.5]{/cmd\_vel} (base.south);
+\draw[t] (oak) -- (chase);
+\draw[t] (base.north east) -- node[lab,pos=0.55]{/odom + tf} (map.south west);
+\draw[t] (base.east) -- node[lab,pos=0.55]{/odom, /imu/data} (ekf.west);
+\draw[t] (gps.east) -- node[lab,pos=0.35]{/gps/fix} (nst.west);
+\draw[t] ([xshift=-4mm]ekf.south) -- node[lab,left]{/odometry/global} ([xshift=-4mm]nst.north);
+\draw[t] ([xshift=4mm]nst.north) -- node[lab,right]{/odometry/gps} ([xshift=4mm]ekf.south);
+\end{tikzpicture}
+\caption{ROS computation graph (gmapping mode with GPS fusion)}
+\label{fig:rosgraph}
+\end{figure}
+
+{\small
+\begin{longtable}{>{\ttfamily\raggedright\arraybackslash}p{1.55in}>{\raggedright\arraybackslash}p{1.15in}>{\raggedright\arraybackslash}p{0.6in}>{\raggedright\arraybackslash}p{2.5in}}
+\caption{Topics (message types without their package prefix)}\label{tab:topics}\\
+\toprule
+\normalfont Topic & Type & Rate & Publisher $\rightarrow$ subscribers \\
+\midrule
+\endfirsthead
+\toprule
+\normalfont Topic & Type & Rate & Publisher $\rightarrow$ subscribers \\
+\midrule
+\endhead
+/scan & LaserScan & \SI{7.2}{Hz} & rplidarNode $\rightarrow$ SLAM, RViz \\
+/odom & Odometry & \SI{30}{Hz} & bbai\_base $\rightarrow$ EKF, RViz \\
+/imu/data\_raw & Imu & \SI{30}{Hz} & bbai\_base (rates and acceleration, no orientation) \\
+/imu/data & Imu & \SI{30}{Hz} & bbai\_base (adds compass yaw) $\rightarrow$ EKF, navsat\_transform \\
+/imu/mag & MagneticField & \SI{30}{Hz} & bbai\_base (raw field, tesla) \\
+/wheel\_ticks & Int32MultiArray & \SI{30}{Hz} & bbai\_base (raw counts of channels 1--4, debugging) \\
+/cmd\_vel & Twist & 20--100~Hz & ps4\_teleop, chase $\rightarrow$ bbai\_base \\
+/joy & Joy & 20--100~Hz & ps4\_teleop $\rightarrow$ chase \\
+/gps/fix & NavSatFix & \SI{1}{Hz} & gps $\rightarrow$ navsat\_transform \\
+/gps/vel & TwistStamped & \SI{1}{Hz} & gps (ENU ground velocity, only with a fix) \\
+/odometry/global & Odometry & \SI{20}{Hz} & ekf\_gps (frame \frm{gps\_map}) $\rightarrow$ navsat\_transform, user \\
+/odometry/gps & Odometry & \SI{1}{Hz} & navsat\_transform $\rightarrow$ ekf\_gps \\
+/gps/filtered & NavSatFix & \SI{10}{Hz} & navsat\_transform (fused estimate as latitude/longitude) \\
+/map & OccupancyGrid & \SI{0.5}{Hz} & SLAM $\rightarrow$ RViz, map\_saver \\
+/chase/target & PointStamped & \SI{15}{Hz} & chase (target in the camera frame) \\
+/chase/status & String & \SI{2}{Hz} & chase (human-readable state) \\
+/chase/cmd\_vel\_preview & Twist & \SI{15}{Hz} & chase (what it would command) \\
+\bottomrule
+\end{longtable}
+}
+
+\influx{\topic{/imu/data}, the GPS fusion launch file and its EKF
+configuration are on branch \texttt{slam-estimator-updates} (commit
+\texttt{5d4c6b6}) and not yet merged into \texttt{main}. This document
+describes that branch.}
+
+\section{COORDINATE FRAMES}
+\label{sec:frames}
+
+Frames follow ROS REP~103 and REP~105 \cite{rep103,rep105}: right-handed,
+$x$ forward, $y$ left, $z$ up on the body, and east-north-up (ENU) for world
+frames, with yaw $\psi$ measured counter-clockwise from the world $x$ axis.
+REP~105 defines three world-fixed frames with different guarantees:
+\begin{description}
+\item[\frm{odom}] continuous (no jumps) but drifts without bound. Published by
+  \texttt{bbai\_base} from wheel odometry and the gyroscope.
+\item[\frm{map}] does not drift, but may jump when a correction arrives.
+  Published by SLAM as the transform \frm{map}$\to$\frm{odom}.
+\item[\frm{earth}/UTM] the GPS frame, related to \frm{map} by the navsat
+  transform (\S\ref{sec:navsat}).
+\end{description}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[font=\small,
+  f/.style={draw,rounded corners=2pt,fill=blue!6,minimum width=20mm,minimum height=7mm},
+  e/.style={-{Latex[length=2mm]},thick},
+  lab/.style={font=\scriptsize,align=left}]
+\node[f] (map) at (0,0) {\frm{map}};
+\node[f] (odom) at (0,-1.5) {\frm{odom}};
+\node[f] (base) at (0,-3.0) {\frm{base\_link}};
+\node[f] (laser) at (-3.6,-4.6) {\frm{laser}};
+\node[f] (imu) at (0,-4.6) {\frm{imu\_link}};
+\node[f] (gps) at (3.6,-4.6) {\frm{gps\_link}};
+\draw[e] (map) -- node[lab,right]{SLAM (gmapping / hector)} (odom);
+\draw[e] (odom) -- node[lab,right]{bbai\_base, \SI{30}{Hz}} (base);
+\draw[e] (base) -- (laser);
+\node[lab,below=1mm of laser,align=center]{static: $z=\SI{0.10}{m}$,\\ yaw \SI{180}{\degree}};
+\draw[e] (base) -- (imu);
+\node[lab,below=1mm of imu,align=center]{static: $z=\SI{0.05}{m}$};
+\draw[e] (base) -- (gps);
+\node[lab,below=1mm of gps,align=center]{static: $z=\SI{0.08}{m}$};
+\end{tikzpicture}
+\caption{Transform tree}
+\label{fig:tf}
+\end{figure}
+
+The three static transforms in \file{robot.launch} have zero horizontal
+offset; their positions are placeholders that have not been measured. The
+lidar transform has a yaw of \SI{180}{\degree} ($\pi$): a mount test showed
+that the A1's zero bearing points at the robot's rear (\S\ref{sec:slamdiag}).
+The IMU and GPS transforms have zero rotation.
+\influx{The \SI{180}{\degree} lidar yaw is on branch
+\texttt{slam-estimator-updates} (commit 0044110), not yet on \texttt{main}.}
+
+Each transform in the tree must have exactly one publisher. In particular,
+only one node may publish \frm{odom}$\to$\frm{base\_link}: either
+\texttt{bbai\_base} (\texttt{publish\_tf: true}, the current setting) or an
+EKF, never both.
+
+\section{BRINGUP SEQUENCE}
+
+\begin{enumerate}
+\item Board: \texttt{roslaunch bbai\_base robot.launch}. This starts the
+  master, \texttt{rplidar\_ros}, \texttt{bbai\_base} (which measures the gyro
+  bias for \SI{2}{s}, so the robot must be still), \texttt{gps\_node}, and the
+  three static transforms. Arguments \texttt{lidar:=false} and
+  \texttt{gps:=false} leave those devices out. \texttt{bbai\_base} is
+  respawned automatically \SI{5}{s} after it exits.
+\item Board: \texttt{roslaunch bbai\_teleop teleop.launch}.
+\item Laptop: \texttt{\textasciitilde/bbai\_slam/start\_slam.sh [gmapping|hector|lidar\_only]}
+  (gmapping by default), which also opens RViz.
+\item Laptop, optional: \texttt{roslaunch \textasciitilde/bbai\_slam/gps\_fusion.launch}.
+\item Board, optional: \texttt{roslaunch bbai\_chase chase.launch} (dry run
+  unless \texttt{dry\_run:=false}).
+\end{enumerate}
+The full command list is \file{docs/COMMANDS.md}.
+
+\section{BASE NODE}
+
+\texttt{base\_node.py} runs a fixed-rate loop at \SI{30}{Hz}. Each cycle it
+reads the IMU and the four encoders, integrates the pose
+(Chapter~\ref{ch:kinematics}), publishes \topic{/odom}, the
+\frm{odom}$\to$\frm{base\_link} transform, \topic{/imu/data\_raw},
+\topic{/imu/mag} and \topic{/wheel\_ticks}, and enforces the command timeout:
+if no \topic{/cmd\_vel} message has arrived for \SI{0.5}{s}, all motors are
+set to zero. Motors are also zeroed when the node exits.
+
+With \texttt{mag\_heading: true} it also publishes \topic{/imu/data}: the
+same rates and accelerations as \topic{/imu/data\_raw} plus an orientation
+whose yaw comes from the calibrated magnetometer (\S\ref{sec:mag}). While the
+robot is parked it applies a zero-velocity update to the heading and the gyro
+bias (\S\ref{sec:zupt}).
+
+\influx{The compass output, the zero-velocity update and
+\texttt{mag\_calibrate.py} are on branch \texttt{slam-estimator-updates}; the
+version on \texttt{main} has neither.}
+
+\section{PS4 TELEOP}
+
+\texttt{ps4\_teleop.py} reads the Linux joystick API directly
+(\texttt{/dev/input/js*}, 8-byte events of time, value, type and number) and
+looks the device up by name (\texttt{Wireless Controller}), skipping the
+controller's separate motion-sensor device. It publishes \topic{/joy} and,
+only while the deadman button is held, \topic{/cmd\_vel}. Publishing runs as a
+\SI{20}{Hz} heartbeat that speeds up to at most \SI{100}{Hz} while the sticks
+move, and all queued events are drained on each read so the commands never
+lag behind a backlog.
+
+\begin{table}[htbp]
+\centering
+\caption{PS4 controller mapping (\texttt{hid-sony}, kernel 4.14)}
+\label{tab:ps4}
+\small
+\begin{tabular}{lll}
+\toprule
+Input & Index & Effect \\
+\midrule
+L1 (hold) & button 4 & Deadman. Nothing moves unless held; release sends one zero Twist \\
+Left stick vertical & axis 1 & \texttt{linear.x}, \SI{0.3}{m/s} full scale (turbo \SI{0.7}{m/s}) \\
+Right stick horizontal & axis 3 & \texttt{angular.z} (curve below) \\
+R1 (with L1) & button 5 & Turbo scaling \\
+R2 (L1 released) & button 7 & Arms the chase node \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The stick values are $a\in[-1,1]$ after dividing by \num{32767}, with a dead
+zone $\abs{a}<0.08$ mapped to zero. Stick ``up'' is negative on the joystick
+API, so both axes are negated. In the repository version the command is
+linear in the stick,
+\begin{equation}\label{eq:teleop}
+v = -k_v\,a_1,\qquad \omega = -k_\omega\,a_3,
+\end{equation}
+with $(k_v,k_\omega)=(0.3,1.5)$ normally and $(0.7,8.0)$ in turbo.
+
+\influx{On 2 October 2026 the turn axis was changed to a curve because
+\SI{1.5}{rad/s} at full stick could not overcome skid-steer friction
+(\S\ref{sec:skidturn}). The installed version gives about
+\SI{1.5}{rad/s} at half stick, \SI{6}{rad/s} at full stick and
+\SI{10}{rad/s} at full stick in turbo. It is installed on the board but not yet
+in the repository.}
+
+\section{CHASE NODE}
+\label{sec:chase}
+
+Chapter~\ref{ch:chase} covers the chase behaviour in full; this section
+summarizes the node.
+
+
+\texttt{chase\_node.py} runs a MobileNet-SSD spatial detection network on the
+OAK-D-Lite: the $300\times300$ RGB preview feeds the network on the camera's
+VPU, and the stereo depth (aligned to RGB) gives each detection a 3-D position
+$(x,z)$ in the camera frame, $x$ to the right and $z$ forward. The node keeps
+the most confident detection whose label is in \texttt{targets} and computes a
+bearing and range,
+\begin{equation}
+\beta = \atantwo(x,z),\qquad \rho=\sqrt{x^2+z^2},
+\end{equation}
+falling back to $\beta=(c_x-\tfrac12)\,\mathrm{HFOV}$ from the box centre
+$c_x\in[0,1]$ when the box has no valid depth. Both are smoothed with an
+exponential moving average of weight $a=0.5$. After at least 3 consecutive
+detections the command is
+\begin{align}
+\omega &= \begin{cases}
+  \sat_{\omega_{\max}}\!\left(-k_\beta\,\beta\right) & \abs{\beta}>\beta_{\mathrm{db}}\\
+  0 & \text{otherwise}\end{cases}\\
+v &= \sat_{[0,v_{\max}]}\!\bigl(k_\rho(\rho-\rho_f)\bigr)\cdot
+     \sat_{[0,1]}\!\left(1-\frac{\abs{\beta}}{\beta_{\mathrm{full}}}\right),
+     \qquad \rho>\rho_{\mathrm{stop}},
+\end{align}
+with $k_\beta=2.5$, $\omega_{\max}=\SI{2}{rad/s}$,
+$\beta_{\mathrm{db}}=\SI{5}{\degree}$, $k_\rho=0.4$, $v_{\max}=\SI{0.2}{m/s}$,
+follow distance $\rho_f=\SI{0.9}{m}$, $\beta_{\mathrm{full}}=\SI{25}{\degree}$
+and stop distance $\rho_{\mathrm{stop}}=\SI{0.5}{m}$. The second factor of $v$
+slows the robot while it is still turning toward the target. The robot never
+reverses.
+
+\paragraph{Command arbitration.} Both teleop and chase publish
+\topic{/cmd\_vel}, and \texttt{bbai\_base} applies whichever arrives last.
+Conflicts are avoided by the buttons: chase only publishes while R2 is held
+and L1 is not, and teleop only publishes while L1 is held. Chase also stops
+if \topic{/joy} goes quiet for \SI{0.5}{s} or the target is lost for
+\SI{0.5}{s}. In the default dry-run mode chase never publishes
+\topic{/cmd\_vel} at all, only \topic{/chase/cmd\_vel\_preview}.

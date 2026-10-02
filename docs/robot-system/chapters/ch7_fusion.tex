@@ -1,0 +1,177 @@
+\chapter{SENSOR FUSION: THE GPS EKF}
+\label{ch:fusion}
+
+The global estimate combines wheel odometry, the gyroscope, the compass and
+GPS in an extended Kalman filter (EKF) from the robot\_localization package
+\cite{moore2014generalized}, running on the laptop as node \texttt{ekf\_gps}
+(\file{laptop/bbai\_slam/gps\_fusion.launch} and \file{gps\_ekf.yaml}). This
+chapter states the filter's model, the measurement model of each sensor, and
+how the result relates to the SLAM map.
+
+\section{THE DISCRETE EKF}
+
+The thesis gives the linear discrete Kalman filter in predictor--corrector
+form (thesis \S7.7, after Kalman \cite{kalman1960} and Simon
+\cite{simon2006optimal}). The EKF is the same recursion with the state
+transition $f$ and measurement $h$ nonlinear and their Jacobians used for the
+covariance:
+\begin{align}
+\xhat_{k}^- &= f\bigl(\xhat_{k-1}^+,\Delta t_k\bigr), &
+P_k^- &= F_kP_{k-1}^+F_k\T + Q_k\,\Delta t_k, \label{eq:ekfpred}\\
+\bm\nu_k &= \bm z_k - H_k\xhat_k^-, &
+S_k &= H_kP_k^-H_k\T + R_k, \label{eq:ekfinnov}\\
+K_k &= P_k^-H_k\T S_k^{-1}, &
+\xhat_k^+ &= \xhat_k^- + K_k\bm\nu_k, \label{eq:ekfgain}\\
+P_k^+ &= (I-K_kH_k)P_k^-(I-K_kH_k)\T + K_kR_kK_k\T, \label{eq:joseph}
+\end{align}
+with $F_k=\partial f/\partial\bm x$ at $\xhat_{k-1}^+$. The covariance update
+\eqref{eq:joseph} is the Joseph form, the same one the thesis uses, which keeps $P$ symmetric and positive definite under round-off.
+Angular components of the innovation are wrapped to $(-\pi,\pi]$.
+robot\_localization runs the prediction at a fixed \SI{20}{Hz}
+(\texttt{frequency}) and applies each sensor message as it arrives, after
+predicting forward to the message's time stamp. Measurements may update any
+subset of the state; $H_k$ is then the rows of the identity that select the
+components marked \texttt{true} in that sensor's configuration vector.
+
+\section{STATE AND PROCESS MODEL}
+
+robot\_localization always carries a 15-element state,
+\begin{equation}
+\bm x = [\,x\ y\ z\ \ \phi\ \theta\ \psi\ \ \dot x_b\ \dot y_b\ \dot z_b\ \
+\dot\phi\ \dot\theta\ \dot\psi\ \ \ddot x_b\ \ddot y_b\ \ddot z_b\,]\T,
+\end{equation}
+pose in the world frame and velocities and accelerations in the body frame.
+With \texttt{two\_d\_mode: true}, $z$, $\phi$, $\theta$ and their derivatives
+are fixed at zero, leaving the planar state
+$[x,\ y,\ \psi,\ v_x,\ v_y,\ \omega,\ a_x,\ a_y]$. The process model is the
+``omnidirectional'' constant-acceleration model:
+\begin{equation}\label{eq:ekfmodel}
+\begin{aligned}
+x_{k} &= x_{k-1} + \bigl(v_x\cos\psi - v_y\sin\psi\bigr)\Delta t
+         + \tfrac12\bigl(a_x\cos\psi - a_y\sin\psi\bigr)\Delta t^2,\\
+y_{k} &= y_{k-1} + \bigl(v_x\sin\psi + v_y\cos\psi\bigr)\Delta t
+         + \tfrac12\bigl(a_x\sin\psi + a_y\cos\psi\bigr)\Delta t^2,\\
+\psi_{k} &= \psi_{k-1} + \omega\,\Delta t,\\
+v_{x,k} &= v_{x,k-1}+a_x\Delta t,\quad v_{y,k}=v_{y,k-1}+a_y\Delta t,\quad
+\omega_k=\omega_{k-1},
+\end{aligned}
+\end{equation}
+with accelerations held constant between updates. Its Jacobian has the
+familiar dead-reckoning entries
+$\partial x/\partial\psi = -(v_x\sin\psi+v_y\cos\psi)\Delta t+\dots$ and
+$\partial y/\partial\psi = (v_x\cos\psi-v_y\sin\psi)\Delta t+\dots$, the same
+coupling as \eqref{eq:odomcov}. The process noise $Q$ is the package default
+(a diagonal of small values, \num{0.05} on position and \num{0.06} on yaw per
+second); it has not been tuned for this robot.
+
+\section{MEASUREMENTS}
+\label{sec:ekfcfg}
+
+Table~\ref{tab:ekfin} lists exactly what is fused. Each input contributes
+only the components marked, with the covariance its publisher reports.
+
+\begin{table}[htbp]
+\centering
+\caption{EKF inputs (\file{gps\_ekf.yaml})}
+\label{tab:ekfin}
+\small
+\begin{tabularx}{\linewidth}{>{\ttfamily}lllX}
+\toprule
+\normalfont Input & Topic & Fused & Variance \\
+\midrule
+odom0 & \topic{/odom} & $v_x$ & \SI{0.01}{m^2/s^2} \ ($\sigma=\SI{0.1}{m/s}$) \\
+imu0 & \topic{/imu/data} & $\psi$, $\omega$ & $\psi$: \SI{0.05}{rad^2} ($\sigma\approx\SI{13}{\degree}$);
+   $\omega$: \SI{1e-4}{rad^2/s^2} \\
+odom1 & \topic{/odometry/gps} & $x$, $y$ & $(\mathrm{HDOP}\cdot\SI{5}{m})^2$ \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Written out, the measurement functions are linear selections,
+\begin{equation}
+h_{\mathrm{odom}}(\bm x)=v_x,\qquad
+h_{\mathrm{imu}}(\bm x)=\begin{bmatrix}\psi\\\omega\end{bmatrix},\qquad
+h_{\mathrm{gps}}(\bm x)=\begin{bmatrix}x\\y\end{bmatrix},
+\end{equation}
+so all of the nonlinearity is in the process model.
+
+\paragraph{Design choices.}
+\begin{itemize}
+\item \emph{Odometry contributes speed only.} The odometry pose and its yaw
+  are not fused. The pose covariance from \texttt{bbai\_base} is constant
+  rather than growing (\S\ref{sec:odom}), so fusing it would over-trust it;
+  and odometry yaw is the integrated gyroscope, which would double-count the
+  gyroscope rate already fused from imu0. $v_y$ is not fused either; the
+  model has no constraint that keeps it at zero, so it is held small only by
+  the process noise. Fusing $v_y=0$ (a nonholonomic pseudo-measurement) would
+  tighten the filter.
+\item \emph{Heading is absolute from the compass, rate from the gyroscope.} The
+  filter is then exactly the Kalman form of the complementary filter
+  \eqref{eq:yawcf}: the gyroscope carries the heading between compass
+  updates, and the compass bounds its drift. With variances of
+  \SI{1e-4}{} on $\omega$ and \SI{0.05}{} on $\psi$ the compass corrects the
+  heading slowly.
+\item \emph{The gyroscope bias is not a state.} robot\_localization has no bias
+  states, so a constant rate error appears as a heading ramp that the compass
+  pulls back. The bias estimate comes from the base node's zero-velocity
+  update instead (\S\ref{sec:zupt}).
+\item \emph{No outlier gating.} The Mahalanobis thresholds
+  (\texttt{*\_rejection\_threshold}) are left at their default of infinity,
+  so a GPS multipath jump is accepted at its stated covariance. Setting
+  \texttt{odom1\_pose\_rejection\_threshold} to about 3--5 (rejecting
+  innovations with $\bm\nu\T S^{-1}\bm\nu$ above that many standard
+  deviations squared) would guard against it.
+\end{itemize}
+
+\section{OBSERVABILITY AND BEHAVIOUR WITHOUT A FIX}
+
+With a GPS fix the filter observes $x$, $y$ and $\psi$ directly and the
+covariance stays bounded. Without one (always, indoors), $x$ and $y$ are not
+observed: the filter integrates the odometry speed along the compass-and-gyro
+heading, and $P_{xx}$ and $P_{yy}$ grow as in \eqref{eq:odomcov}. That is the
+``coasting'' behaviour: \topic{/odometry/global} is then a dead-reckoning
+estimate whose heading is anchored to the compass rather than to the gyro's
+start-up direction. When fixes return, the first few updates pull the
+estimate onto the GPS track with a jump proportional to the drift accumulated.
+
+\section{RELATION TO THE SLAM MAP}
+\label{sec:maprel}
+
+The EKF publishes no transform (\texttt{publish\_tf: false}). Its output lives
+in its own world frame \frm{gps\_map}, while gmapping owns
+\frm{map}$\to$\frm{odom}. The two estimates run side by side:
+\begin{center}
+\small
+\begin{tabular}{lll}
+\toprule
+& SLAM (gmapping) & GPS EKF \\
+\midrule
+World frame & \frm{map} & \frm{gps\_map} \\
+Absolute reference & the lidar map & GPS and the compass \\
+Works indoors & yes & coasts only \\
+Publishes TF & \frm{map}$\to$\frm{odom} & none \\
+Consumers & RViz, map\_saver & topic only \\
+\bottomrule
+\end{tabular}
+\end{center}
+Both start from the same odometry, so for short runs they agree up to a fixed
+rotation and translation. This keeps the two from fighting, but nothing yet
+relates \frm{map} to \frm{gps\_map} or to latitude and longitude.
+
+\paragraph{Aligning the frames.} If the robot drives a path outdoors where
+both are valid, the rigid transform between them follows from the paired
+positions $(\bm a_i,\bm g_i)$ in \frm{map} and \frm{gps\_map} by least squares
+\cite{umeyama1991least}:
+\begin{equation}\label{eq:align}
+\theta^\star=\atantwo\!\left(\sum_i \bar{\bm g}_i\times\bar{\bm a}_i,\
+\sum_i \bar{\bm g}_i\cdot\bar{\bm a}_i\right),\qquad
+\bm t^\star=\bar{\bm a}-R(\theta^\star)\bar{\bm g},
+\end{equation}
+where $\bar{\bm a}$, $\bar{\bm g}$ are the means and $\bar{\bm a}_i$,
+$\bar{\bm g}_i$ the centred points ($\times$ is the planar cross product
+$g_xa_y-g_ya_x$). Publishing $(\theta^\star,\bm t^\star)$ as a static
+transform \frm{map}$\to$\frm{gps\_map} would put GPS fixes on the lidar map.
+A fuller design, for when the robot navigates on a saved map, replaces
+gmapping with a localiser (AMCL or slam\_toolbox in localization mode) and a
+second, map-frame EKF that owns \frm{map}$\to$\frm{odom} and fuses both the
+localiser's pose and GPS \cite{moore2014generalized}.

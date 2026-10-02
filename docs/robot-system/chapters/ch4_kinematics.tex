@@ -1,0 +1,261 @@
+\chapter{DRIVE KINEMATICS AND WHEEL ODOMETRY}
+\label{ch:kinematics}
+
+\section{NOTATION}
+
+Table~\ref{tab:geom} lists the geometric parameters, with the values in
+\file{ros/bbai\_base/config/base.yaml}.
+
+\begin{table}[htbp]
+\centering
+\caption{Geometry and drive parameters}
+\label{tab:geom}
+\small
+\begin{tabular}{clll}
+\toprule
+Symbol & Meaning & Value & \texttt{base.yaml} key \\
+\midrule
+$r$ & wheel radius & \SI{0.0396}{m} & \texttt{wheel\_radius} \\
+$b$ & track (left--right wheel centres) & \SI{0.120}{m} & \texttt{track\_width} \\
+$L$ & wheelbase (front--back axles) & \SI{0.101}{m} & --- \\
+$N$ & encoder counts per wheel revolution & \num{15} & \texttt{counts\_per\_rev} \\
+$\Delta t$ & odometry period & $1/30$~s & \texttt{rate} \\
+$v_{\max}$ & wheel speed at duty 1 (lifted) & \SI{1.2}{m/s} & \texttt{max\_wheel\_speed} \\
+$d_{\max}$ & duty limit & 0.60 & \texttt{max\_duty} \\
+$d_{\min}$ & duty floor for any nonzero command & 0.12 & \texttt{min\_duty} \\
+$T_{\mathrm{cmd}}$ & command timeout & \SI{0.5}{s} & \texttt{cmd\_timeout} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The pose in the \frm{odom} frame is $\bm{p}=[x\ y\ \psi]\T$. Subscript $k$
+denotes the $k$-th cycle of the \SI{30}{Hz} loop, and $\Delta(\cdot)_k$ the
+change between cycles $k-1$ and $k$.
+
+\section{FROM ENCODER COUNTS TO WHEEL TRAVEL}
+
+Let $c_j$ be the raw count of encoder channel $j\in\{1,2,3,4\}$ and
+$\sigma_j\in\{+1,-1\}$ its sign from Table~\ref{tab:channels}. One count is an
+arc of
+\begin{equation}\label{eq:mpc}
+\delta = \frac{2\pi r}{N} = \frac{2\pi(0.0396)}{15} = \SI{0.01659}{m}.
+\end{equation}
+Each side averages its two wheels,
+\begin{equation}
+s_L = \frac{\delta}{2}\bigl(\sigma_1c_1+\sigma_3c_3\bigr),\qquad
+s_R = \frac{\delta}{2}\bigl(\sigma_2c_2+\sigma_4c_4\bigr),
+\end{equation}
+and the travel of the body centre in one cycle is
+\begin{equation}\label{eq:dcentre}
+d_k = \tfrac12\bigl(\Delta s_{L,k}+\Delta s_{R,k}\bigr).
+\end{equation}
+Averaging both wheels per side halves the effect of a single wheel slipping
+or being spun by hand: a spurious count on one wheel moves its side's average
+by half a count.
+
+\begin{remark}[Quantization]\label{rem:quant}
+With $N=15$ the encoders are coarse. One count is \SI{16.6}{mm} of wheel
+travel, so $d_k$ is quantized in steps of $\delta/4=\SI{4.1}{mm}$. The
+velocity published on \topic{/odom}, $v_k=d_k/\Delta t$, is therefore
+quantized in steps of $\delta/(4\Delta t)=\SI{0.124}{m/s}$ at \SI{30}{Hz}: at
+a steady \SI{0.3}{m/s} it alternates between about 2 and 3 levels from one
+message to the next. This is the same trade the thesis identifies for its
+motor encoders (the sample-rate remark in thesis \S7.5): raising the loop rate makes the
+differenced velocity noisier for a fixed encoder resolution. Position, which
+is a sum of counts, is not affected; only the per-message velocity is.
+Anything that consumes the twist (the EKF in particular) should either use a
+longer differencing window or carry a velocity variance of at least
+$\delta^2/(192\,\Delta t^2)\approx\SI{1.3e-3}{m^2/s^2}$, the variance of a
+uniform quantization error of width $\delta/(4\Delta t)$.
+\end{remark}
+
+\section{SKID-STEER KINEMATICS}
+\label{sec:skid}
+
+For a differential-drive robot with no wheel slip the body speed and yaw rate
+are
+\begin{equation}\label{eq:diffdrive}
+v = \tfrac12(v_R+v_L),\qquad \omega = \frac{v_R-v_L}{b}.
+\end{equation}
+A four-wheel skid-steer robot cannot turn without its wheels sliding
+sideways, because the front and back wheels on each side are fixed parallel
+at a distance $L$ apart. The instantaneous centres of rotation of the left and
+right treads move outward, which is captured by an effective track
+$\chi b$ with $\chi\ge1$ \cite{mandow2007skid,martinez2005icr}:
+\begin{equation}\label{eq:skidkin}
+\omega = \frac{v_R-v_L}{\chi\,b}.
+\end{equation}
+$\chi$ depends on the ratio $L/b$ (here $0.84$, which is high), the floor
+surface, the load and the turn rate itself; values of 1.5 to 2 are typical. An
+encoder-only heading using \eqref{eq:diffdrive} would overestimate every turn
+by the factor $\chi$, and that factor would change between carpet and tile.
+This is why the base node takes its heading from the gyroscope
+(\texttt{use\_gyro\_heading: true}) and uses the encoders only for distance.
+
+\section{ODOMETRY INTEGRATION}
+\label{sec:odom}
+
+The heading increment is
+\begin{equation}\label{eq:dpsi}
+\Delta\psi_k = \begin{cases}
+\bigl(g_{z,k}-\hat b_g\bigr)\Delta t_k & \text{gyro heading (default)}\\[2pt]
+\dfrac{\Delta s_{R,k}-\Delta s_{L,k}}{b} & \text{encoder heading}
+\end{cases}
+\end{equation}
+where $g_z$ is the $z$ gyroscope rate and $\hat b_g$ the bias estimate
+(\S\ref{sec:gyro}). While the robot is parked, $\Delta\psi_k=0$
+(\S\ref{sec:zupt}). The pose is advanced with the midpoint rule
+(second-order Runge--Kutta),
+\begin{equation}\label{eq:odomint}
+\begin{aligned}
+x_{k} &= x_{k-1} + d_k\cos\!\left(\psi_{k-1}+\tfrac12\Delta\psi_k\right),\\
+y_{k} &= y_{k-1} + d_k\sin\!\left(\psi_{k-1}+\tfrac12\Delta\psi_k\right),\\
+\psi_{k} &= \wrap\!\left(\psi_{k-1}+\Delta\psi_k\right),
+\end{aligned}
+\end{equation}
+with $\wrap(\alpha)=\atantwo(\sin\alpha,\cos\alpha)\in(-\pi,\pi]$.
+For motion on a circular arc the exact update is
+\begin{equation}
+x_k = x_{k-1}+\frac{d_k}{\Delta\psi_k}\Bigl[\sin(\psi_{k-1}+\Delta\psi_k)-\sin\psi_{k-1}\Bigr],
+\end{equation}
+and similarly for $y$. Expanding both in $\Delta\psi_k$ shows that the
+midpoint rule differs from the exact arc only by a factor
+$1-\Delta\psi_k^2/24$ on the step length. At the fastest turn the robot makes,
+\SI{10}{rad/s}, $\Delta\psi_k=\SI{0.33}{rad}$ and the error is 0.5\% of
+$d_k$, and in a pure spin $d_k\approx0$ anyway, so \eqref{eq:odomint} is
+adequate.
+
+The message also carries the body velocity $v_k=d_k/\Delta t_k$ and
+$\omega_k=\Delta\psi_k/\Delta t_k$, and the same pose is broadcast as the
+transform \frm{odom}$\to$\frm{base\_link} with quaternion
+$\bm{q}=[0,\,0,\,\sin\frac{\psi}{2},\,\cos\frac{\psi}{2}]$.
+
+\subsection{Odometry uncertainty}
+
+Linearising \eqref{eq:odomint} about the current estimate gives the usual
+dead-reckoning covariance propagation \cite{thrun2005probabilistic},
+\begin{equation}\label{eq:odomcov}
+P_k = F_k P_{k-1}F_k\T + G_k Q_k G_k\T,\qquad
+F_k=\begin{bmatrix}1&0&-d_k\sin\bar\psi\\0&1&d_k\cos\bar\psi\\0&0&1\end{bmatrix},\quad
+G_k=\begin{bmatrix}\cos\bar\psi&0\\\sin\bar\psi&0\\0&1\end{bmatrix},
+\end{equation}
+where $\bar\psi=\psi_{k-1}+\frac12\Delta\psi_k$ and
+$Q_k=\operatorname{diag}(\sigma_d^2,\sigma_{\psi}^2)$ is the variance of one
+step's distance and heading increments. The position uncertainty grows
+without bound, and the heading term couples into it through the off-diagonal
+entries of $F_k$: a heading error $\delta\psi$ produces a lateral error
+$d\,\delta\psi$ after travelling $d$.
+
+\begin{remark}[The published covariance is constant]
+\texttt{base\_node.py} publishes a fixed diagonal covariance,
+$(0.01, 0.01, 10^6, 10^6, 10^6, 0.05)$ for $(x,y,z,\phi,\theta,\psi)$ on both
+the pose and the twist. The $10^6$ entries correctly mark the unobserved
+states. The pose entries, however, claim a \SI{0.1}{m} standard deviation
+forever, while \eqref{eq:odomcov} grows. A filter that fuses the
+\topic{/odom} \emph{pose} as an absolute measurement will therefore trust it
+far too much after a few metres. The safe use is to fuse only the twist, or the
+pose in robot\_localization's \texttt{differential} mode. The GPS EKF does the
+former: it takes only $v_x$ from \topic{/odom} (\S\ref{sec:ekfcfg}).
+\end{remark}
+
+\section{FROM VELOCITY COMMAND TO MOTOR DUTY}
+\label{sec:duty}
+
+A \topic{/cmd\_vel} message $(v,\omega)$ is turned into a desired speed for each
+side using the skid-steer model \eqref{eq:skidkin} with a commanded
+effective track $\chi_c$,
+\begin{equation}\label{eq:sidespeed}
+v_L = v-\tfrac12\omega \chi_c,\qquad v_R = v+\tfrac12\omega \chi_c,
+\end{equation}
+and each side speed into a PWM duty for both of that side's motors,
+\begin{equation}\label{eq:duty}
+u=\frac{v_{\mathrm{side}}}{v_{\max}},\qquad
+D = \sat_{d_{\max}}\!\Bigl(\sgn(u)\bigl[d_{\min}+(1-d_{\min})\abs{u}\bigr]\Bigr),
+\quad (D=0 \text{ if } \abs{u}<10^{-3}),
+\end{equation}
+multiplied by the motor's sign.
+
+\paragraph{Effective track for commands.} Originally $\chi_c$ was the
+geometric track $b=\SI{0.12}{m}$. On the floor a command of
+\SI{5.0}{rad/s} then produced only \SI{1.31}{rad/s} as measured by the gyro,
+because the tyres scrub sideways and the robot turns as if its track were
+wider (\S\ref{sec:skid}). The ratio gives the effective track directly,
+\begin{equation}\label{eq:chicmd}
+\chi_c = b\,\frac{\omega_{\mathrm{cmd}}}{\omega_{\mathrm{meas}}}
+       = 0.12\times\frac{5.0}{1.31}\approx\SI{0.46}{m},
+\end{equation}
+now the \texttt{cmd\_turn\_track} parameter in \file{base.yaml}, so that
+\topic{/cmd\_vel}'s $\omega$ approximately equals the real yaw rate on that
+floor. Odometry is unaffected: it still takes heading from the gyro.
+\influx{\texttt{cmd\_turn\_track} is on branch \texttt{slam-estimator-updates}
+(commit 2d2a56d), not yet on \texttt{main}. It was measured on one floor;
+carpet and hard floor will differ.}
+
+The offset $d_{\min}$ is a deadzone
+compensator: below about 8\% duty the wheels do not turn at all (lifted
+test), so any nonzero command starts at 12\%. This is the inverse of the
+deadzone nonlinearity the thesis models for its own motors (thesis
+\S7.6.2). The control is open loop: duty sets voltage, and the speed that
+results depends on load and battery voltage. The encoders are used for
+odometry but not for speed feedback.
+
+Table~\ref{tab:dutyex} evaluates \eqref{eq:sidespeed}--\eqref{eq:duty} for
+the commands teleop sends, with the old and new $\chi_c$. The duty limit of
+0.6 is reached at $\abs{u}=0.545$, so the fastest either side can be
+commanded is about \SI{0.65}{m/s}, and with $\chi_c=\SI{0.46}{m}$ the
+fastest commanded spin is $2\times0.65/0.46\approx\SI{2.8}{rad/s}$.
+
+\begin{table}[htbp]
+\centering
+\caption{Commanded duty $(D_L, D_R)$ for typical commands}
+\label{tab:dutyex}
+\small
+\begin{tabular}{lcc}
+\toprule
+Command & $\chi_c=b=\SI{0.12}{m}$ (old) & $\chi_c=\SI{0.46}{m}$ (new) \\
+\midrule
+Forward \SI{0.3}{m/s} & $0.34,\ 0.34$ & $0.34,\ 0.34$ \\
+Spin \SI{1}{rad/s} & $-0.16,\ 0.16$ & $-0.29,\ 0.29$ \\
+Spin \SI{1.5}{rad/s} (old full stick) & $-0.19,\ 0.19$ & $-0.37,\ 0.37$ \\
+Spin \SI{6}{rad/s} (new full stick) & $-0.38,\ 0.38$ & $-0.60,\ 0.60$ (limit) \\
+Spin \SI{10}{rad/s} (new turbo) & $-0.56,\ 0.56$ & $-0.60,\ 0.60$ (limit) \\
+Forward \SI{0.3}{m/s} + \SI{1.5}{rad/s} & $0.27,\ 0.41$ & $-0.15,\ 0.59$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{WHY SKID-STEER TURNING NEEDS SO MUCH POWER}
+\label{sec:skidturn}
+
+Jason observed on 2 October 2026 that normal-speed turning would not start the
+robot spinning from rest and barely turned it while moving. A simple
+friction model explains this \cite{wong2008theory}. Let the robot weigh $W$,
+shared equally by the four wheels, which sit at $\pm L/2$ from the centre
+along the body and $\pm b/2$ across it. Spinning in place, each wheel must
+slide sideways, and the floor resists with a lateral friction force
+$\mu_\ell W/4$ acting at a lever arm of $L/2$. The total resisting moment is
+\begin{equation}
+M_r = 4\cdot\mu_\ell\frac{W}{4}\cdot\frac{L}{2}=\frac{\mu_\ell W L}{2}.
+\end{equation}
+The motors supply it with opposing tractive forces $\pm F$ per side at lever
+arm $b/2$, a moment of $F\,b$. Turning starts only when
+\begin{equation}\label{eq:spinforce}
+F \ \ge\ \frac{\mu_\ell L}{2b}\,W \approx 0.42\,\mu_\ell W .
+\end{equation}
+Driving straight only has to overcome rolling resistance $f_rW$ with $f_r$ of
+order 0.02--0.05, whereas lateral sliding friction $\mu_\ell$ is of order 0.3--0.7
+on household floors. A spin therefore needs roughly 3 to 15 times the
+tractive force of driving straight. With the old linear mapping, full stick
+asked for \SI{1.5}{rad/s}, which with the geometric track is a duty of only
+0.19 (Table~\ref{tab:dutyex}), barely above the 0.12 floor; that is enough
+to keep a lifted wheel turning but not to make the tyres scrub. This
+motivated the new teleop turn curve (\SI{6}{rad/s} at full stick) and then
+the effective command track $\chi_c=\SI{0.46}{m}$, which roughly doubles the
+duty of every turn command. A closed-loop yaw-rate or wheel-speed controller
+(Chapter~\ref{ch:motor}) would make turn response independent of the floor
+surface.
+
+\begin{remark}
+\eqref{eq:spinforce} shows the turn force grows with $L/b$. Moving the
+wheels farther apart, or using wheels with less lateral grip, would reduce it.
+\end{remark}

@@ -1,0 +1,281 @@
+\chapter{MOTOR CONTROL AND TRACKING LOOPS}
+\label{ch:motor}
+
+This chapter follows a velocity command from \topic{/cmd\_vel} down to the
+voltage across each motor, models the motors, lists every feedback and
+tracking loop on the robot with its rate, and then proposes the two loops the
+robot is missing: a closed-loop wheel-speed controller and a yaw-rate
+controller. Sections marked \emph{proposed} describe designs that are not yet
+in the code.
+
+\section{THE ACTUATOR CHAIN}
+\label{sec:actuator}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  box/.style={draw,rounded corners=2pt,align=center,font=\small,
+              minimum height=10mm,inner sep=3pt,text width=22mm},
+  arr/.style={-{Stealth[length=2mm]},thick}]
+\node[box] (cmd) {\topic{/cmd\_vel}\\$(v,\omega)$};
+\node[box,right=6mm of cmd] (side) {Side speeds\\\eqref{eq:sidespeed}};
+\node[box,right=6mm of side] (duty) {Duty map\\\eqref{eq:duty}};
+\node[box,right=6mm of duty,text width=27mm] (rc) {{\footnotesize\texttt{rc\_motor\_set}}\\dir GPIOs + PWM};
+\node[box,below=8mm of rc,text width=27mm] (hb) {TB6612FNG\\H-bridge};
+\node[box,left=12mm of hb] (mot) {DC gear\\motor ($\times2$)};
+\node[box,left=6mm of mot] (wheel) {Wheel and\\floor};
+\node[box,left=6mm of wheel] (enc) {Hall encoder\\(odometry only)};
+\draw[arr] (cmd) -- (side);
+\draw[arr] (side) -- (duty);
+\draw[arr] (duty) -- (rc);
+\draw[arr] (rc) -- (hb);
+\draw[arr] (hb) -- node[above=1pt,font=\scriptsize]{$D V_{\mathrm{bat}}$} (mot);
+\draw[arr] (mot) -- (wheel);
+\draw[arr] (wheel) -- (enc);
+\end{tikzpicture}
+\caption{Path from a velocity command to the wheels (one side). There is no
+speed feedback today: the encoders feed odometry only.}
+\label{fig:actuator}
+\end{figure}
+
+Figure~\ref{fig:actuator} shows the chain. \texttt{bbai\_base} receives
+$(v,\omega)$, splits it into side speeds \eqref{eq:sidespeed}, and maps each
+to a signed duty $D\in[-0.6,0.6]$ with the deadzone offset \eqref{eq:duty}.
+librobotcontrol's \texttt{rc\_motor\_set(ch, D)} then
+\begin{enumerate}
+\item multiplies $D$ by the channel polarity (the fork's table is
+  $\{1,-1,1,-1\}$ for M1--M4, so the wiring of each motor's leads does not
+  matter to the caller),
+\item sets the two direction inputs \texttt{IN1}/\texttt{IN2} of that
+  H-bridge channel from the sign of $D$ (for M1 one of these is driven by the
+  PRU firmware of \S\ref{sec:pru}), and
+\item writes $\abs{D}$ to the channel's PWM output at \SI{25}{kHz}
+  (\texttt{RC\_MOTOR\_DEFAULT\_PWM\_FREQ}).
+\end{enumerate}
+The \SI{25}{kHz} carrier is above hearing and far above the motor's
+electrical corner frequency $R/L$, so the motor current is essentially DC
+with a small ripple.
+
+\paragraph{Drive and brake.} The TB6612FNG works in \emph{sign--magnitude}
+mode: during the on-part of each PWM period the bridge applies
+$\pm V_{\mathrm{bat}}$ to the motor, and during the off-part it shorts both
+motor terminals together (short brake, the chip's behaviour when
+\texttt{PWM} is low with a direction set). The current recirculates through
+the low-side switches, so in continuous conduction the average terminal
+voltage is simply
+\begin{equation}\label{eq:vavg}
+\bar V = D\,V_{\mathrm{bat}} - 2 i R_{\mathrm{on}},
+\end{equation}
+where $R_{\mathrm{on}}\approx\SI{0.5}{\ohm}$ is the on-resistance of one
+switch. Setting $D=0$ (all four duty outputs zero) brakes the motors rather
+than letting them coast; \texttt{rc\_motor\_free\_spin} would coast them,
+but the base node does not use it.
+
+\section{DC MOTOR MODEL}
+\label{sec:motormodel}
+
+The thesis models its permanent-magnet DC motors with the standard
+electrical and mechanical equations (thesis \S5.1). Written for one motor of
+this robot, with armature current $i$, motor-shaft speed $\Omega_m$ and gear
+ratio $N$ (so the wheel turns at $\Omega=\Omega_m/N$),
+\begin{equation}\label{eq:dcmotor}
+L_a\frac{\dd i}{\dd t} = \bar V - R_a i - K_e\Omega_m,\qquad
+J_m\frac{\dd\Omega_m}{\dd t} = K_t i - b_m\Omega_m - \frac{\tau_\ell}{N\eta},
+\end{equation}
+with armature resistance $R_a$ and inductance $L_a$, back-EMF constant
+$K_e$, torque constant $K_t$ ($=K_e$ in SI units), viscous friction $b_m$,
+gearbox efficiency $\eta$, and load torque $\tau_\ell$ at the wheel. The
+electrical time constant $L_a/R_a$ is well under a millisecond for motors
+this size, so the current settles almost instantly and
+\eqref{eq:dcmotor} reduces to a first-order model for the wheel speed. With
+$\tau_\ell = r F$ for a tractive force $F$ at the tyre,
+\begin{equation}\label{eq:motor1st}
+\tau_m\frac{\dd\Omega}{\dd t} + \Omega
+ = \underbrace{\frac{K_t}{N(K_tK_e+R_ab_m)}}_{K_V} \bar V
+ - \underbrace{\frac{R_a}{N^2\eta(K_tK_e+R_ab_m)}}_{K_F}\, rF,
+\qquad
+\tau_m=\frac{R_aJ_{\mathrm{eq}}}{K_tK_e+R_ab_m},
+\end{equation}
+where $J_{\mathrm{eq}}$ includes the motor rotor and the reflected inertia of
+the wheel and its share of the robot's mass.
+
+\paragraph{What this says about open-loop duty control.} In steady state
+the wheel speed is
+\begin{equation}\label{eq:wheelss}
+v_{\mathrm{wheel}} = r\Omega = rK_V\bigl(D\,V_{\mathrm{bat}}-2iR_{\mathrm{on}}\bigr) - rK_F\,rF .
+\end{equation}
+The duty map \eqref{eq:duty} assumes the first term alone with a fixed
+$V_{\mathrm{bat}}$. Equation \eqref{eq:wheelss} shows two errors in that
+assumption:
+\begin{itemize}
+\item \emph{Battery voltage.} A 2S LiPo falls from \SI{8.4}{V} full to about
+  \SI{7.0}{V} near empty, so the same duty gives about 17\% less speed by
+  the end of a run.
+\item \emph{Load.} Any force at the tyre subtracts speed in proportion to
+  $K_F$. Driving straight on a level floor the load is small (rolling
+  resistance), but in a skid-steer turn it is large: \eqref{eq:spinforce}
+  says each side must push with about $0.42\mu_\ell W$ before the robot
+  rotates at all. The second term then cancels most of the first, which is
+  why low-duty turns stalled (\S\ref{sec:skidturn}).
+\end{itemize}
+The deadzone below about 8\% duty is the same equation with Coulomb friction
+in the gearbox: the motor must make a minimum torque before it moves.
+
+\paragraph{Identifying the model.} $K_V$ and $\tau_m$ can be measured with
+the wheels lifted (where $F\approx0$) by stepping the duty and logging
+\topic{/wheel\_ticks}: the final speed divided by $D V_{\mathrm{bat}}$ gives
+$K_V$ (the lifted test of 2026-10-01 gives about
+$\SI{0.4}{m/s}/(0.3\times\SI{7.9}{V}) \approx \SI{0.17}{m/s/V}$ at the
+wheel), and the time to 63\% of it gives $\tau_m$. Repeating the step on the
+floor in a spin gives the load term. Because of the coarse encoder
+(\S\ref{sec:speedest}), the step response should be fitted to the
+accumulated count, $\int v\,\dd t$, rather than to a differentiated speed.
+
+\section{LOOPS ON THE ROBOT TODAY}
+\label{sec:loops}
+
+Table~\ref{tab:loops} lists every periodic loop and tracking loop in the
+system, from the lowest level up.
+
+\begin{table}[htbp]
+\centering
+\caption{Periodic, feedback and tracking loops}
+\label{tab:loops}
+\small
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{30mm}
+  >{\raggedright\arraybackslash}p{19mm} >{\raggedright\arraybackslash}p{24mm} X}
+\toprule
+Loop & Rate & Where & What it closes \\
+\midrule
+PWM carrier & \SI{25}{kHz} & cape PWM & None; sets average voltage \eqref{eq:vavg}. \\
+Encoder counting & per edge & eQEP $\times3$, PRU & None; hardware counters. \\
+Base loop & \SI{30}{Hz} & \texttt{bbai\_base} & Reads encoders and IMU, integrates odometry \eqref{eq:odomint}, publishes \topic{/odom} and \topic{/imu/*}. \\
+Command watchdog & \SI{30}{Hz} check, \SI{0.5}{s} timeout & \texttt{bbai\_base} & Stops the motors when \topic{/cmd\_vel} goes quiet. \\
+Wheel speed & none & & \emph{Open loop}: duty from \eqref{eq:duty}. Proposed in \S\ref{sec:speedloop}. \\
+Gyro bias (ZUPT) & \SI{30}{Hz} while still & \texttt{bbai\_base} & Tracks the gyro bias toward the measured rate when the robot is stationary (\S\ref{sec:zupt}). \\
+Heading & \SI{30}{Hz} & \texttt{bbai\_base} & Complementary gyro--compass filter (\S\ref{sec:compfilt}). \\
+Teleop & \SI{20}{Hz} idle, up to \SI{100}{Hz} & \texttt{bbai\_teleop} & Human in the loop. \\
+Chase & \SI{15}{Hz} & \texttt{bbai\_chase} & Bearing and range to a detected dog or person (Chapter~\ref{ch:chase}). \\
+Chase yaw rate & \SI{15}{Hz} & \texttt{bbai\_chase} & Gyro PI loop on the requested turn rate (\S\ref{sec:chaseyaw}; PR~\#3, untested). \\
+Detection & about \SI{10}{Hz} & OAK-D-Lite & Runs on the camera; feeds the chase loop. \\
+Global EKF & \SI{20}{Hz} & \texttt{ekf\_gps} & Fuses odometry, IMU yaw and GPS (Chapter~\ref{ch:fusion}). \\
+SLAM & per scan (\SIrange{5}{7}{Hz}) & gmapping / hector & Scan matching against the map (Chapter~\ref{ch:slam}). \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The only loops that close around the robot's motion today are the human
+(teleop) and the chase controller, and both close around the motors through
+the open-loop duty map. Everything between the velocity command and the
+wheel is feed-forward.
+
+\section{ENCODER SPEED ESTIMATION}
+\label{sec:speedest}
+
+Any speed loop needs a speed measurement, and the encoders are coarse: 15
+counts per wheel turn, $\delta=2\pi r/15=\SI{16.6}{mm}$ of travel per count.
+A side's speed averaged over its two encoders and differenced over one
+\SI{30}{Hz} sample is quantized in steps of
+\begin{equation}
+\Delta v = \frac{\delta/2}{\Delta t} = \SI{0.25}{m/s},
+\end{equation}
+which is most of the robot's useful speed range. Two standard remedies, both
+from the thesis's discussion of encoder sample rate (thesis \S7.5):
+\begin{enumerate}
+\item \emph{Fixed-window differencing.} Difference over the last $M$
+  samples: $\hat v_k = (s_k-s_{k-M})/(M\Delta t)$, where $s$ is the
+  accumulated distance. The quantization step falls to $\Delta v/M$ and the
+  estimate lags by $M\Delta t/2$. $M=6$ (\SI{0.2}{s}) gives \SI{0.04}{m/s}
+  steps and a \SI{0.1}{s} lag.
+\item \emph{Period measurement.} Time-stamp each count edge and use
+  $\hat v=\delta/T_{\mathrm{edge}}$. This is much better at low speed but
+  needs edge timestamps, which the eQEP units can capture (their unit timer
+  and capture registers) but librobotcontrol does not expose.
+\end{enumerate}
+Option 1 needs no driver change and is what the proposed loop below
+assumes; its lag is part of the loop delay.
+
+\section{PROPOSED: WHEEL-SPEED LOOP}
+\label{sec:speedloop}
+
+\emph{Proposed, not implemented.} A per-side PI controller around the
+first-order model \eqref{eq:motor1st}, with the current duty map as
+feed-forward:
+\begin{equation}\label{eq:speedpi}
+\begin{aligned}
+e_k &= v^\ast_k - \hat v_k,\\
+D_k &= \underbrace{D_{\mathrm{ff}}(v^\ast_k)}_{\eqref{eq:duty}}
+      + K_p e_k + I_k,\\
+I_{k+1} &= I_k + K_i\Delta t\, e_k + K_{aw}\bigl(\sat(D_k)-D_k\bigr),
+\end{aligned}
+\end{equation}
+where $\sat$ is the $\pm0.6$ duty limit and the last term is back-calculation
+anti-windup: while the output is saturated, the integrator is bled toward
+the value that just reaches the limit, so it does not wind up during a
+stalled turn and overshoot when the robot breaks free. The feed-forward does
+most of the work on a level floor; the integrator supplies the extra duty a
+skid-steer turn needs \eqref{eq:spinforce} and compensates battery sag.
+
+\paragraph{Gain selection.} Linearising \eqref{eq:motor1st} about an
+operating point, duty to side speed is $G(s)=K_D/(\tau_m s+1)$ with
+$K_D=rK_VV_{\mathrm{bat}}$ (about \SI{1.3}{m/s} per unit duty from the lifted
+test). With PI $C(s)=K_p+K_i/s$, choosing the PI zero on the motor pole,
+$K_i/K_p=1/\tau_m$, cancels it and leaves the closed loop
+\begin{equation}
+\frac{\hat v}{v^\ast} = \frac{1}{\tau_c s+1},\qquad \tau_c=\frac{\tau_m}{K_pK_D}.
+\end{equation}
+The estimator lag $M\Delta t/2=\SI{0.1}{s}$ and the \SI{33}{ms} sample period
+act as a delay $\tau_d\approx\SI{0.12}{s}$; for a phase margin of about
+\SI{60}{\degree} the crossover $1/\tau_c$ should be at most about
+$\pi/(6\tau_d)\approx\SI{4.4}{rad/s}$, so $\tau_c\approx\SI{0.25}{s}$. With
+an assumed $\tau_m=\SI{0.1}{s}$ (to be measured as in
+\S\ref{sec:motormodel}) that gives $K_p\approx0.3$ and $K_i\approx3$ per
+\si{m/s}, and $K_{aw}\approx K_i/K_p$.
+
+\paragraph{Interaction with odometry.} The loop changes nothing about how
+odometry is computed. It makes the commanded and actual speeds agree, which
+also makes the EKF's process model, which assumes the robot does what it is
+told between measurements, more accurate.
+
+\section{PROPOSED: YAW-RATE LOOP}
+\label{sec:yawloop}
+
+\emph{Proposed, not implemented.} Even with each side tracking its speed,
+a skid-steer robot does not turn at $\omega=(v_R-v_L)/b$: the wheels slip
+sideways and the effective track $\chi$ of \eqref{eq:skidkin} is larger than
+$b$ and depends on the floor. The gyro measures the true yaw rate directly,
+so an outer loop on yaw rate removes that uncertainty:
+\begin{equation}\label{eq:yawloop}
+\Delta v_k = \frac{\chi_0}{2}\,\omega^\ast_k
+            + K_\omega\bigl(\omega^\ast_k-\omega_{g,k}\bigr) + J_k,\qquad
+J_{k+1}=J_k+K_{\omega i}\Delta t\bigl(\omega^\ast_k-\omega_{g,k}\bigr),
+\end{equation}
+with $v^\ast_{L,R}=v\mp\Delta v$ passed to the speed loops, $\omega_g$ the
+bias-corrected gyro rate from the base node, and $\chi_0$ a nominal effective
+track. The feed-forward part now exists: \texttt{cmd\_turn\_track}
+$=\SI{0.46}{m}$ (\eqref{eq:chicmd}) is exactly $\chi_0$, so the loop's
+integrator only has to correct for how the floor differs from the one it was
+measured on. The gyro is sampled at the same \SI{30}{Hz} but needs
+no differencing, so this loop has less delay than the speed loop and can run
+somewhat faster than it. The integrator $J$ learns the floor-dependent
+$\chi$; it should be frozen whenever $\abs{\omega^\ast}$ is small, so it does
+not fight the straight-line drift that the heading estimate already handles.
+
+The chase node now implements a simpler form of this loop for its own turn
+commands, as a PI correction on $\omega$ ahead of the base node
+(\S\ref{sec:chaseyaw}, PR~\#3, untested). Moving it into the base would
+give teleop the same benefit.
+
+\section{IMPLEMENTATION NOTES}
+
+\begin{itemize}
+\item Both loops belong in \texttt{bbai\_base}, at the existing \SI{30}{Hz},
+  so they share the encoder and gyro reads already there. Raising the base
+  rate to \SI{50}{Hz} would help the yaw loop more than the speed loop, whose
+  limit is encoder resolution.
+\item The watchdog must reset both integrators when it stops the motors, and
+  the feed-forward deadzone offset should stay so that small commands still
+  move the robot before the integrator catches up.
+\item A parameter \texttt{closed\_loop: false} would keep the present
+  behaviour available for comparison.
+\end{itemize}

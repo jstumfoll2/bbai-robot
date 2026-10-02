@@ -1,0 +1,97 @@
+\chapter{REFERENCE}
+\label{app:ref}
+
+\section{REPOSITORY MAP}
+
+\begin{table}[htbp]
+\centering
+\caption{Where things are in \texttt{jstumfoll2/bbai-robot}}
+\small
+\begin{tabularx}{\linewidth}{>{\ttfamily\raggedright\arraybackslash}p{2.3in}X}
+\toprule
+\normalfont Path & Contents \\
+\midrule
+devicetree/ & Robotics Cape device tree for the BB-AI, patch and full sources \\
+librobotcontrol/ & Submodule: the \texttt{v1.1\_AIfixes} fork \\
+pru/ & Notes on the PRU2\_0 \texttt{gpio\_rpmsg} firmware \\
+system/ & \texttt{uEnv.txt}, btsdio blacklist, encoder tick logger \\
+gps/ & libgps patch for \texttt{/dev/ttyS2} at 4800 baud \\
+ros/bbai\_base/ & Base node, GPS node, compass calibration, \texttt{base.yaml}, \texttt{robot.launch} \\
+ros/bbai\_teleop/ & PS4 teleop node, Bluetooth bring-up and pairing scripts, systemd unit \\
+ros/bbai\_chase/ & Chase-the-dog node \\
+laptop/bbai\_slam/ & gmapping, hector and GPS fusion launch files, EKF config, RViz, scripts \\
+camera/ & OAK-D-Lite board scripts, PC calibration tools, calibration backup \\
+docs/ & Goals, handoff, calibration guide, command cheat sheet, this document \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The day-to-day commands for the board, laptop, PC and controller are in
+\file{docs/COMMANDS.md}.
+
+\section{BASE NODE PARAMETERS}
+
+\begin{table}[htbp]
+\centering
+\caption{\texttt{base.yaml} (branch \texttt{slam-estimator-updates})}
+\small
+\begin{tabularx}{\linewidth}{>{\ttfamily}l>{\ttfamily}lX}
+\toprule
+\normalfont Key & \normalfont Value & Meaning \\
+\midrule
+left\_encoders, right\_encoders & [1, 3], [2, 4] & encoder channels per side \\
+encoder\_signs & \{1:1, 2:-1, 3:1, 4:-1\} & forward counts up \\
+counts\_per\_rev & 15.0 & from the \SI{3}{ft} push \\
+wheel\_radius & 0.0396 & m \\
+track\_width & 0.120 & m; used only for encoder heading and duty split \\
+use\_gyro\_heading & true & heading from the gyroscope \\
+publish\_tf & true & publish \frm{odom}$\to$\frm{base\_link} \\
+rate & 30.0 & Hz \\
+left\_motors, right\_motors & [1, 2], [3, 4] & motor channels per side \\
+motor\_signs & all 1 & positive duty drives forward \\
+max\_wheel\_speed & 1.2 & m/s at duty 1 (lifted) \\
+max\_duty / min\_duty & 0.6 / 0.12 & duty cap and deadzone floor \\
+cmd\_timeout & 0.5 & s \\
+zupt\_delay / zupt\_bias\_tau & 0.5 / 20.0 & s; defaults in code \\
+mag\_heading & true & publish \topic{/imu/data} \\
+mag\_offset\_x / \_y & 11.71 / 66.61 & \si{\micro T}, hard-iron offset \\
+mag\_sign & 1 & compass direction \\
+declination\_deg & 2.5 & east positive \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{SYMBOLS}
+
+\begin{table}[htbp]
+\centering
+\caption{Main symbols}
+\small
+\begin{tabular}{cl}
+\toprule
+$x,y,\psi$ & planar pose; $\psi$ is ENU yaw, counter-clockwise from east \\
+$v,\omega$ & body speed and yaw rate \\
+$r,b,L$ & wheel radius, track, wheelbase \\
+$\chi$ & skid-steer effective-track factor \\
+$\delta$ & wheel travel per encoder count \\
+$g_z,\ \hat b_g$ & gyroscope $z$ rate and its bias estimate \\
+$\bm m,\ \bm o$ & magnetometer reading and hard-iron offset \\
+$D$ & magnetic declination, east positive \\
+$\chi_c$ & compass heading, clockwise from north ($=\pi/2-\psi$) \\
+$\varphi,\lambda,h$ & latitude, longitude, ellipsoidal height \\
+$P,Q,R,K,H$ & EKF covariance, process noise, measurement noise, gain, measurement matrix \\
+$\ell_i$ & occupancy log-odds of cell $i$ \\
+$M,\ N_{\mathrm{eff}}$ & particle count and effective sample size \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{BUILDING THIS DOCUMENT}
+
+\begin{lstlisting}
+cd docs/robot-system
+make            # pdflatex + bibtex; or: latexmk -pdf main.tex
+\end{lstlisting}
+It needs a TeX distribution with the \texttt{amsmath}, \texttt{siunitx},
+\texttt{booktabs}, \texttt{tikz} and \texttt{listings} packages (on Ubuntu:
+\texttt{texlive-latex-extra texlive-science}).
