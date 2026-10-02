@@ -65,6 +65,9 @@ class BaseNode(object):
         self.counts_per_rev = float(p("~counts_per_rev", 16.0))
         self.wheel_radius = float(p("~wheel_radius", 0.0325))
         self.track = float(p("~track_width", 0.13))
+        # Skid steer turns slower than the wheel geometry predicts (wheels scrub),
+        # so /cmd_vel turn rates are mapped to wheel speeds with a wider effective track
+        self.cmd_turn_track = float(p("~cmd_turn_track", self.track))
         self.use_gyro_heading = p("~use_gyro_heading", True)
         # Zero-velocity update: while the wheels are still and no drive command is
         # active, hold the heading and keep re-estimating the gyro bias
@@ -132,8 +135,8 @@ class BaseNode(object):
 
     def on_cmd_vel(self, msg):
         v, w = msg.linear.x, msg.angular.z
-        self.set_side(self.left_motors, v - w * self.track / 2.0)
-        self.set_side(self.right_motors, v + w * self.track / 2.0)
+        self.set_side(self.left_motors, v - w * self.cmd_turn_track / 2.0)
+        self.set_side(self.right_motors, v + w * self.cmd_turn_track / 2.0)
         self.last_cmd_time = time.time()
 
     def side_ticks(self, chs):

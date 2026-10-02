@@ -11,6 +11,7 @@ counts_per_rev: 15.0
 # Robot geometry in meters (4-wheel skid steer, axle spacing 0.101 m)
 wheel_radius: 0.0396   # 79.2 mm wheels
 track_width: 0.120     # left-right wheel centers; only used if use_gyro_heading is false
+cmd_turn_track: 0.46   # effective skid-steer track for /cmd_vel turns (5.0 rad/s at 0.12 m gave 1.31 rad/s)
 use_gyro_heading: true
 publish_tf: true
 rate: 30.0
