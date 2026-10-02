@@ -252,7 +252,10 @@ J_{k+1}=J_k+K_{\omega i}\Delta t\bigl(\omega^\ast_k-\omega_{g,k}\bigr),
 \end{equation}
 with $v^\ast_{L,R}=v\mp\Delta v$ passed to the speed loops, $\omega_g$ the
 bias-corrected gyro rate from the base node, and $\chi_0$ a nominal effective
-track (start with $b$). The gyro is sampled at the same \SI{30}{Hz} but needs
+track. The feed-forward part now exists: \texttt{cmd\_turn\_track}
+$=\SI{0.46}{m}$ (\eqref{eq:chicmd}) is exactly $\chi_0$, so the loop's
+integrator only has to correct for how the floor differs from the one it was
+measured on. The gyro is sampled at the same \SI{30}{Hz} but needs
 no differencing, so this loop has less delay than the speed loop and can run
 somewhat faster than it. The integrator $J$ learns the floor-dependent
 $\chi$; it should be frozen whenever $\abs{\omega^\ast}$ is small, so it does

@@ -162,9 +162,10 @@ former: it takes only $v_x$ from \topic{/odom} (\S\ref{sec:ekfcfg}).
 \label{sec:duty}
 
 A \topic{/cmd\_vel} message $(v,\omega)$ is turned into a desired speed for each
-side using the differential model \eqref{eq:diffdrive},
+side using the skid-steer model \eqref{eq:skidkin} with a commanded
+effective track $\chi_c$,
 \begin{equation}\label{eq:sidespeed}
-v_L = v-\tfrac12\omega b,\qquad v_R = v+\tfrac12\omega b,
+v_L = v-\tfrac12\omega \chi_c,\qquad v_R = v+\tfrac12\omega \chi_c,
 \end{equation}
 and each side speed into a PWM duty for both of that side's motors,
 \begin{equation}\label{eq:duty}
@@ -172,7 +173,25 @@ u=\frac{v_{\mathrm{side}}}{v_{\max}},\qquad
 D = \sat_{d_{\max}}\!\Bigl(\sgn(u)\bigl[d_{\min}+(1-d_{\min})\abs{u}\bigr]\Bigr),
 \quad (D=0 \text{ if } \abs{u}<10^{-3}),
 \end{equation}
-multiplied by the motor's sign. The offset $d_{\min}$ is a deadzone
+multiplied by the motor's sign.
+
+\paragraph{Effective track for commands.} Originally $\chi_c$ was the
+geometric track $b=\SI{0.12}{m}$. On the floor a command of
+\SI{5.0}{rad/s} then produced only \SI{1.31}{rad/s} as measured by the gyro,
+because the tyres scrub sideways and the robot turns as if its track were
+wider (\S\ref{sec:skid}). The ratio gives the effective track directly,
+\begin{equation}\label{eq:chicmd}
+\chi_c = b\,\frac{\omega_{\mathrm{cmd}}}{\omega_{\mathrm{meas}}}
+       = 0.12\times\frac{5.0}{1.31}\approx\SI{0.46}{m},
+\end{equation}
+now the \texttt{cmd\_turn\_track} parameter in \file{base.yaml}, so that
+\topic{/cmd\_vel}'s $\omega$ approximately equals the real yaw rate on that
+floor. Odometry is unaffected: it still takes heading from the gyro.
+\influx{\texttt{cmd\_turn\_track} is on branch \texttt{slam-estimator-updates}
+(commit 2d2a56d), not yet on \texttt{main}. It was measured on one floor;
+carpet and hard floor will differ.}
+
+The offset $d_{\min}$ is a deadzone
 compensator: below about 8\% duty the wheels do not turn at all (lifted
 test), so any nonzero command starts at 12\%. This is the inverse of the
 deadzone nonlinearity the thesis models for its own motors (thesis
@@ -181,24 +200,26 @@ results depends on load and battery voltage. The encoders are used for
 odometry but not for speed feedback.
 
 Table~\ref{tab:dutyex} evaluates \eqref{eq:sidespeed}--\eqref{eq:duty} for
-the commands teleop sends. The duty limit of 0.6 is reached at
-$\abs{u}=0.545$, so the fastest either side can be commanded is about
-\SI{0.65}{m/s}.
+the commands teleop sends, with the old and new $\chi_c$. The duty limit of
+0.6 is reached at $\abs{u}=0.545$, so the fastest either side can be
+commanded is about \SI{0.65}{m/s}, and with $\chi_c=\SI{0.46}{m}$ the
+fastest commanded spin is $2\times0.65/0.46\approx\SI{2.8}{rad/s}$.
 
 \begin{table}[htbp]
 \centering
-\caption{Commanded duty for typical commands}
+\caption{Commanded duty $(D_L, D_R)$ for typical commands}
 \label{tab:dutyex}
 \small
-\begin{tabular}{lcccc}
+\begin{tabular}{lcc}
 \toprule
-Command & $v_L$ (\si{m/s}) & $v_R$ (\si{m/s}) & $D_L$ & $D_R$ \\
+Command & $\chi_c=b=\SI{0.12}{m}$ (old) & $\chi_c=\SI{0.46}{m}$ (new) \\
 \midrule
-Forward \SI{0.3}{m/s} & 0.30 & 0.30 & 0.34 & 0.34 \\
-Spin \SI{1.5}{rad/s} (old full stick) & $-0.09$ & 0.09 & $-0.19$ & 0.19 \\
-Spin \SI{6}{rad/s} (new full stick) & $-0.36$ & 0.36 & $-0.38$ & 0.38 \\
-Spin \SI{10}{rad/s} (new turbo) & $-0.60$ & 0.60 & $-0.56$ & 0.56 \\
-Forward \SI{0.3}{m/s} + \SI{1.5}{rad/s} & 0.21 & 0.39 & 0.27 & 0.41 \\
+Forward \SI{0.3}{m/s} & $0.34,\ 0.34$ & $0.34,\ 0.34$ \\
+Spin \SI{1}{rad/s} & $-0.16,\ 0.16$ & $-0.29,\ 0.29$ \\
+Spin \SI{1.5}{rad/s} (old full stick) & $-0.19,\ 0.19$ & $-0.37,\ 0.37$ \\
+Spin \SI{6}{rad/s} (new full stick) & $-0.38,\ 0.38$ & $-0.60,\ 0.60$ (limit) \\
+Spin \SI{10}{rad/s} (new turbo) & $-0.56,\ 0.56$ & $-0.60,\ 0.60$ (limit) \\
+Forward \SI{0.3}{m/s} + \SI{1.5}{rad/s} & $0.27,\ 0.41$ & $-0.15,\ 0.59$ \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -225,12 +246,14 @@ Driving straight only has to overcome rolling resistance $f_rW$ with $f_r$ of
 order 0.02--0.05, whereas lateral sliding friction $\mu_\ell$ is of order 0.3--0.7
 on household floors. A spin therefore needs roughly 3 to 15 times the
 tractive force of driving straight. With the old linear mapping, full stick
-asked for \SI{1.5}{rad/s}, which by Table~\ref{tab:dutyex} is a duty of only
-0.19, barely above the 0.12 floor; that is enough to keep a lifted wheel
-turning but not to make the tyres scrub. This motivated the new teleop turn
-curve (\SI{6}{rad/s} at full stick). A closed-loop wheel-speed controller
-using the encoders, or a separate duty floor for turning, would make turn
-response independent of the floor surface.
+asked for \SI{1.5}{rad/s}, which with the geometric track is a duty of only
+0.19 (Table~\ref{tab:dutyex}), barely above the 0.12 floor; that is enough
+to keep a lifted wheel turning but not to make the tyres scrub. This
+motivated the new teleop turn curve (\SI{6}{rad/s} at full stick) and then
+the effective command track $\chi_c=\SI{0.46}{m}$, which roughly doubles the
+duty of every turn command. A closed-loop yaw-rate or wheel-speed controller
+(Chapter~\ref{ch:motor}) would make turn response independent of the floor
+surface.
 
 \begin{remark}
 \eqref{eq:spinforce} shows the turn force grows with $L/b$. Moving the

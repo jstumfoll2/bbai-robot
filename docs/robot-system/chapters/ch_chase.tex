@@ -294,7 +294,8 @@ robot turns at the commanded rate, and on this robot it does not
 colour frame, about $\pm\SI{20}{\degree}$ (\S\ref{sec:previewcrop}), so the
 largest rate chase requests is about $2.5\times0.35\approx\SI{0.9}{rad/s}$,
 and even the \SI{2}{rad/s} limit maps through
-\eqref{eq:sidespeed}--\eqref{eq:duty} to a duty of only 0.16--0.21. Teleop's
+\eqref{eq:sidespeed}--\eqref{eq:duty} with the geometric track to a duty of
+only 0.16--0.21. Teleop's
 old \SI{1.5}{rad/s} full stick (duty 0.19) could not start a spin on the
 floor. Sent open loop, chase turns would stall: the motors form a dead zone
 in the loop and the bearing error would sit there. Raising $k_\beta$ is not
@@ -333,6 +334,11 @@ settles at whatever the floor needs. Safeguards:
 \end{itemize}
 This is the yaw-rate loop of \S\ref{sec:yawloop}, implemented in the chase
 node rather than the base, so it helps chase only; teleop is unaffected.
+The duty figures above assume the geometric track. With
+\texttt{cmd\_turn\_track} $=\SI{0.46}{m}$ in the base (\eqref{eq:chicmd}),
+a \SI{0.9}{rad/s} request already maps to a duty of about 0.27, and the
+\SI{8}{rad/s} limit runs into the base's 0.6 duty cap; the integrator then
+has less to do, and its anti-windup keeps it from overshooting.
 
 \paragraph{Effect on the bearing loop.} With the azimuth form
 \eqref{eq:azimuth}, the robot's own rotation reaches the bearing through

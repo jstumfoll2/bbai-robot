@@ -36,6 +36,10 @@ Mode & Sensors & Start & Position estimate \\
   \texttt{gps\_fusion.launch} on the laptop &
   \frm{gps\_map}: bounded by GPS when there is a fix; coasts on odometry
   with compass heading otherwise. \\
+\textbf{G. Autonomous exploration} & lidar, encoders, gyro &
+  \texttt{robot.launch}; \texttt{explore\_house.sh} on the laptop &
+  As A; the robot drives itself to unexplored frontiers
+  (\S\ref{sec:explore}). \\
 \bottomrule
 \end{tabularx}
 \end{table}
@@ -89,8 +93,84 @@ Bluetooth controller & Motors receive no commands; the \SI{0.5}{s} timeout
 \item[Chase, armed.] \texttt{chase.launch dry\_run:=false}. Holding R2 (with
   L1 released) lets the chase node drive toward the target. Waiting on
   separate camera power (\S\ref{sec:powerbudget}).
+\item[Autonomous exploration.] \texttt{\textasciitilde/bbai\_slam/explore\_house.sh}
+  on the laptop, with \texttt{robot.launch} on the board. The robot maps on
+  its own (\S\ref{sec:explore}); Ctrl-C stops it and saves the map.
 \item[Calibration.] \texttt{rosrun bbai\_base mag\_calibrate.py} drives
   \topic{/cmd\_vel} itself to spin two turns. \texttt{motor\_map\_test.py}
   drives each motor in turn and must be run with \texttt{robot.launch}
   stopped and the wheels lifted.
 \end{description}
+
+\section{AUTONOMOUS EXPLORATION}
+\label{sec:explore}
+
+Mode G lets the robot map the house without a driver. It runs entirely on
+the laptop on top of gmapping (mode A) and uses three standard ROS
+components:
+\begin{description}
+\item[gmapping] builds the occupancy grid and publishes \frm{map}$\to$\frm{odom}
+  as in Chapter~\ref{ch:slam}.
+\item[explore\_lite] finds \emph{frontiers}, the boundaries between known
+  free cells and unknown cells \cite{yamauchi1997frontier}. Adjacent
+  frontier cells are grouped, groups smaller than \SI{0.4}{m} are dropped,
+  and each remaining frontier $f$ is scored by
+  \begin{equation}\label{eq:frontier}
+  c(f)=\lambda_d\,d(f)-\lambda_g\,\abs{f},
+  \end{equation}
+  with $d(f)$ the distance from the robot to the frontier, $\abs{f}$ its size,
+  $\lambda_d=3$ (\texttt{potential\_scale}) and $\lambda_g=1$
+  (\texttt{gain\_scale}). The cheapest frontier becomes the next goal, chosen
+  again every \SI{3}{s}; a goal with no progress for \SI{30}{s} is
+  blacklisted.
+\item[move\_base] plans and drives to the goal. A global planner (navfn,
+  Dijkstra's algorithm on the costmap, allowed through unknown space) gives a
+  path, and the DWA local planner \cite{fox1997dynamic} follows it at
+  \SI{5}{Hz}. DWA samples velocity pairs $(v,\omega)$ reachable within one
+  control period under the acceleration limits, forward-simulates each for
+  \SI{2}{s}, and picks
+  \begin{equation}\label{eq:dwa}
+  (v,\omega)^\ast=\argmin_{(v,\omega)}\
+  \alpha\,d_{\mathrm{path}}+\beta\,d_{\mathrm{goal}}+\gamma\,c_{\mathrm{obs}},
+  \end{equation}
+  with $d_{\mathrm{path}}$ and $d_{\mathrm{goal}}$ the end point's distance
+  from the global path and the goal, $c_{\mathrm{obs}}$ the highest costmap cost
+  along the trajectory (trajectories through obstacles are discarded), and
+  $\alpha=32$, $\beta=20$, $\gamma=0.05$.
+\end{description}
+
+\paragraph{Costmaps.} Obstacles come only from \topic{/scan}, marked up to
+\SI{3}{m} and cleared by ray tracing to \SI{6}{m}. The footprint is
+\SI{0.22}{m}$\times$\SI{0.20}{m} plus \SI{2}{cm} padding, and costs are
+inflated out to \SI{0.25}{m} with
+$c(r)=252\,e^{-8(r-r_i)}$ beyond the inscribed radius $r_i$. The local
+costmap is a \SI{3}{m}$\times$\SI{3}{m} window in \frm{odom}; the global
+costmap is the SLAM map.
+
+\paragraph{Motion limits.} At most \SI{0.2}{m/s} forward, never backward
+(the configuration avoids reversing because the lidar is the only obstacle
+sensor), turn rates
+\SIrange{0.6}{1.5}{rad/s}. The \SI{0.6}{rad/s} minimum exists because slower
+turns stall the skid steer; with $\chi_c=\SI{0.46}{m}$ it is a duty of about
+0.22. Each map is saved to \file{\textasciitilde/bbai\_slam/maps/} with a
+timestamp when the script is stopped.
+
+\paragraph{Limits and safety.}
+\begin{itemize}
+\item The RPLIDAR scans one horizontal plane about \SI{10}{cm} up. It cannot
+  see stairs, drop-offs or anything lower than the scan plane (shoes, cables,
+  pet bowls), and it may see table and chair legs only as thin points.
+  \emph{Keep the robot away from stairs, or block them, while exploring.}
+\item The camera stays off during exploration because of the power resets
+  (\S\ref{sec:powerbudget}), so there is no visual obstacle or dog
+  detection.
+\item The deadman does not apply: move\_base publishes \topic{/cmd\_vel}
+  itself at \SI{5}{Hz}. Holding L1 lets teleop interleave its commands, but
+  the two will fight; Ctrl-C on the laptop is the stop, after which the base
+  node's \SI{0.5}{s} timeout halts the motors.
+\item Exploration inherits every SLAM weakness of Chapter~\ref{ch:slam}: if
+  the map breaks, the frontiers are wrong and the robot drives toward them.
+\end{itemize}
+\influx{Exploration and its configuration (\file{laptop/bbai\_slam/nav/}) are on
+branch \texttt{slam-estimator-updates} (commit 2d2a56d) and have not yet been
+run through a whole house.}
