@@ -14,8 +14,16 @@
     <param name="stop_distance" value="0.5"/>
     <param name="max_linear" value="0.2"/>          <!-- m/s, deliberately slow for first tests -->
     <param name="k_linear" value="0.4"/>
-    <param name="max_angular" value="2.0"/>         <!-- rad/s -->
-    <param name="k_angular" value="2.5"/>
+    <param name="max_angular" value="2.0"/>         <!-- requested yaw rate limit, rad/s -->
+    <param name="k_angular" value="2.5"/>           <!-- above ~4 the bearing loop gets unstable -->
+    <!-- Gyro yaw-rate loop: raises angular.z until the robot really turns at the requested rate -->
+    <param name="yaw_loop" value="true"/>
+    <param name="yaw_kp" value="1.0"/>
+    <param name="yaw_ki" value="8.0"/>
+    <param name="max_turn_cmd" value="8.0"/>        <!-- angular.z sent to bbai_base, ~0.47 duty -->
+    <param name="min_spin_cmd" value="4.0"/>        <!-- open-loop turn floor if the gyro is silent -->
+    <!-- Detector input: true = centre crop (~39 deg view), false = full width squashed (~65 deg) -->
+    <param name="preview_keep_aspect" value="true"/>
     <param name="bearing_deadband_deg" value="5.0"/>
     <param name="lost_timeout" value="0.5"/>
   </node>
