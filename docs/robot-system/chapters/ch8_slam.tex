@@ -217,13 +217,14 @@ and they are best ruled out in order:
   way), but driving forward makes the walls appear to approach from behind:
   odometry and scan disagree on every metre travelled and the map breaks as
   soon as the robot drives, which is exactly the symptom.
-  \texttt{lidar\_mount\_test.py} confirmed it on 2 October 2026: during a
-  turn the scan shifted by $-\Delta\psi$ (a rotation, not a mirror image),
-  and driving forward shortened the ranges most at bearing \SI{180}{\degree}.
+  \texttt{lidar\_mount\_test.py} points the same way (2 October 2026):
+  driving forward shortened the ranges most at bearing \SI{180}{\degree}.
   The transform now has yaw $\pi$ in \file{robot.launch} and in the laptop's
-  \file{lidar\_only\_bbai.launch}. Since the fix, the \frm{map}$\to$\frm{odom}
-  correction stays within a few degrees and centimetres across
-  $\pm\SI{90}{\degree}$ turns and \SI{0.3}{m} drives. The lidar's position
+  \file{lidar\_only\_bbai.launch}. The turn checks in the same test are
+  \emph{unverified}: during them only one wheel was seen spinning and the
+  robot did not actually turn, so the reported scan rotation and the small
+  \frm{map}$\to$\frm{odom} correction across $\pm\SI{90}{\degree}$ turns
+  need repeating with the robot really turning. The lidar's position
   is still assumed to be at the robot's centre until it is measured.
 \item \textbf{Turning too fast.} See \S\ref{sec:skew}.
 \item \textbf{Weak scan matches.} At the A1's range and with about 360 beams,
