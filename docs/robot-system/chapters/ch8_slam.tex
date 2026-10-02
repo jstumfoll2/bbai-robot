@@ -209,17 +209,22 @@ while parked. Parked drift measured afterwards was zero.
 \paragraph{Losing track while driving.} Several causes can each produce this,
 and they are best ruled out in order:
 \begin{enumerate}
-\item \textbf{Lidar mounting yaw.} The static transform
-  \frm{base\_link}$\to$\frm{laser} has zero yaw. \texttt{rplidar\_ros} reports
-  angle zero along the A1's own zero direction, which is marked on its housing
-  and is often mounted facing backward. If the transform's yaw is off by
-  \SI{180}{\degree}, a spin in place still looks consistent (the scan rotates
-  in the same direction either way), but driving forward makes the walls
-  appear to approach from behind: odometry and scan disagree on every metre
-  travelled and the map breaks as soon as the robot drives. This matches the
-  symptom closely. \emph{Test:} in RViz with fixed frame \frm{odom}, drive
-  slowly straight toward a wall. The wall should stay still; if it moves, the
-  yaw is wrong. (This check is open and waiting on a drive test.)
+\item \textbf{Lidar mounting yaw (found and fixed).} The static transform
+  \frm{base\_link}$\to$\frm{laser} had zero yaw. \texttt{rplidar\_ros}
+  reports angle zero along the A1's own zero direction, which on this robot
+  points backward. With the yaw off by \SI{180}{\degree}, a spin in place
+  still looks consistent (the scan rotates in the same direction either
+  way), but driving forward makes the walls appear to approach from behind:
+  odometry and scan disagree on every metre travelled and the map breaks as
+  soon as the robot drives, which is exactly the symptom.
+  \texttt{lidar\_mount\_test.py} confirmed it on 2 October 2026: during a
+  turn the scan shifted by $-\Delta\psi$ (a rotation, not a mirror image),
+  and driving forward shortened the ranges most at bearing \SI{180}{\degree}.
+  The transform now has yaw $\pi$ in \file{robot.launch} and in the laptop's
+  \file{lidar\_only\_bbai.launch}. Since the fix, the \frm{map}$\to$\frm{odom}
+  correction stays within a few degrees and centimetres across
+  $\pm\SI{90}{\degree}$ turns and \SI{0.3}{m} drives. The lidar's position
+  is still assumed to be at the robot's centre until it is measured.
 \item \textbf{Turning too fast.} See \S\ref{sec:skew}.
 \item \textbf{Weak scan matches.} At the A1's range and with about 360 beams,
   narrow corridors and open rooms give the matcher little to hold on to.
@@ -239,6 +244,7 @@ and they are best ruled out in order:
   warnings.
 \end{enumerate}
 
-\influx{The lidar thread is working on these. Its results, and any change
-to the lidar's static transform, belong in \file{robot.launch} and this
-section.}
+\influx{The yaw fix, the mount test and a \file{reset\_map.sh} that waits for
+the old gmapping node to exit before relaunching are on branch
+\texttt{slam-estimator-updates} (commit 0044110), not yet on \texttt{main}.
+Longer mapping runs have not been tested yet.}

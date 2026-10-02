@@ -168,8 +168,8 @@ Magnetometer & Calibrated & Compass agrees with the gyro to 3\% over two turns. 
 GPS & Working & No fix indoors, as expected. \\
 Lidar & Working & \SI{7.2}{Hz} on \texttt{ttyS3}. \\
 Bluetooth + PS4 & Working & Report stalls of 100--500~ms in bursts. \\
-SLAM (gmapping) & Poor & Loses track when driving; drifted when stationary.
-   Fixes being tested (\S\ref{sec:slamdiag}). \\
+SLAM (gmapping) & Improving & Parked drift fixed; lidar found mounted
+   backward and its transform corrected (\S\ref{sec:slamdiag}). \\
 GPS fusion (EKF) & Built, untested & Needs an outdoor run with a fix. \\
 OAK-D-Lite detection & Working & Resets the board under full load; waiting on
    separate camera power. \\

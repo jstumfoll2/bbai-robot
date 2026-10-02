@@ -161,18 +161,24 @@ REP~105 defines three world-fixed frames with different guarantees:
 \node[f] (gps) at (3.6,-4.6) {\frm{gps\_link}};
 \draw[e] (map) -- node[lab,right]{SLAM (gmapping / hector)} (odom);
 \draw[e] (odom) -- node[lab,right]{bbai\_base, \SI{30}{Hz}} (base);
-\draw[e] (base) -- node[lab,left,pos=0.35]{static: $z=\SI{0.10}{m}$} (laser);
-\draw[e] (base) -- node[lab,right]{static: $z=\SI{0.05}{m}$} (imu);
-\draw[e] (base) -- node[lab,right,pos=0.35]{static: $z=\SI{0.08}{m}$} (gps);
+\draw[e] (base) -- (laser);
+\node[lab,below=1mm of laser,align=center]{static: $z=\SI{0.10}{m}$,\\ yaw \SI{180}{\degree}};
+\draw[e] (base) -- (imu);
+\node[lab,below=1mm of imu,align=center]{static: $z=\SI{0.05}{m}$};
+\draw[e] (base) -- (gps);
+\node[lab,below=1mm of gps,align=center]{static: $z=\SI{0.08}{m}$};
 \end{tikzpicture}
 \caption{Transform tree}
 \label{fig:tf}
 \end{figure}
 
-The three static transforms in \file{robot.launch} have zero horizontal offset
-and zero rotation. They were entered as placeholders and have not been
-measured. The lidar's yaw in particular must match how the A1 is physically
-mounted, which matters for SLAM (\S\ref{sec:slamdiag}).
+The three static transforms in \file{robot.launch} have zero horizontal
+offset; their positions are placeholders that have not been measured. The
+lidar transform has a yaw of \SI{180}{\degree} ($\pi$): a mount test showed
+that the A1's zero bearing points at the robot's rear (\S\ref{sec:slamdiag}).
+The IMU and GPS transforms have zero rotation.
+\influx{The \SI{180}{\degree} lidar yaw is on branch
+\texttt{slam-estimator-updates} (commit 0044110), not yet on \texttt{main}.}
 
 Each transform in the tree must have exactly one publisher. In particular,
 only one node may publish \frm{odom}$\to$\frm{base\_link}: either
