@@ -20,6 +20,7 @@ Board `debian@192.168.3.120` · Laptop `jason@192.168.3.147` · Master `http://1
 | `roslaunch bbai_chase chase.launch` | Dog chase, dry run (preview only) |
 | `roslaunch bbai_chase chase.launch targets:="[dog, person]"` | Chase dog or person, dry run |
 | `roslaunch bbai_chase chase.launch dry_run:=false` | Chase drives the motors (hold R2) |
+| `roslaunch bbai_chase chase.launch dry_run:=false targets:="[dog, person]"` | Chase dog or person, drives (hold R2) |
 
 ### Calibration and tests
 | Command | What |
