@@ -10,5 +10,5 @@ roslaunch ~/bbai_slam/nav/explore.launch &
 LAUNCH=$!
 trap 'rosrun map_server map_saver -f ~/bbai_slam/maps/house_$(date +%Y%m%d_%H%M) ; kill $LAUNCH; wait $LAUNCH' INT TERM
 sleep 5
-rviz -d ~/bbai_slam/slam.rviz &
+[ -n "$DISPLAY" ] && rviz -d ~/bbai_slam/slam.rviz &
 wait $LAUNCH

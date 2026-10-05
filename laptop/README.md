@@ -8,4 +8,4 @@ Ubuntu 20.04 laptop with ROS Noetic (`~/noetic-catkin-ws` has hector_slam and gm
 3. `reset_map.sh` restarts gmapping from the robot's current spot.
 4. Save a map: `source env.sh && rosrun map_server map_saver -f <name>`
 
-Edit the addresses in `env.sh` if the board or laptop IP changes.
+Edit the board address in `env.sh` if it changes; `ROS_IP` is detected. The same files run on the Proxmox server VM: see `docs/PROXMOX_ROS.md`.
