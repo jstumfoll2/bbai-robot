@@ -8,10 +8,9 @@ recognises the target, how detections become a track, the control law and its
 stability, how it shares the motors with teleop, and the plan for bringing it
 up on the robot. \S\ref{sec:chase} gives a short summary of the ROS node.
 
-\influx{Chase has only been run in dry-run mode, where it computes commands
-but never sends them to the motors. The gyro yaw-rate loop and
-gyro-stabilized bearing of \S\ref{sec:chaseyaw} are implemented (merged in PR~\#3) but not yet tested on the robot. It is waiting on the camera's separate
-power supply (\S\ref{sec:powerbudget}).}
+\influx{Chase has been run in dry run and driving with the wheels off the
+ground (\S\ref{sec:chasetest}), including the gyro yaw-rate loop of
+\S\ref{sec:chaseyaw}. A test on the floor has not been logged yet.}
 
 \section{PIPELINE}
 \label{sec:chasepipe}
@@ -386,7 +385,7 @@ analysis: its bandwidth is far below the delay.
 \section{BRING-UP PLAN}
 \label{sec:chaseplan}
 
-Once the camera runs from the battery bank through the USB splitter:
+Once the camera runs on its own power (\S\ref{sec:resettests}):
 \begin{enumerate}
 \item \textbf{Power soak.} Run \texttt{robot.launch}, lidar and chase (dry
   run) together for several minutes while driving with teleop, and confirm no

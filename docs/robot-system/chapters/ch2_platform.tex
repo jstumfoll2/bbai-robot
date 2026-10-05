@@ -320,9 +320,9 @@ alongside everything else, which matches what was observed: the camera
 alone, or everything without the camera, ran fine, while the full load reset
 the board with the battery voltage steady. The camera datasheet anticipates
 this: hosts that cannot supply its current should use a USB Y-adapter that
-feeds the camera from a separate supply. That is the planned fix (a USB
-splitter cable and battery bank), which moves \SIrange{0.8}{1.5}{A} off the
-cape's rail.
+feeds the camera from a separate supply. A plain Y-cable did not work on
+this robot; a USB-C hub with the battery bank on its power input did
+(\S\ref{sec:resettests}), moving \SIrange{0.8}{1.5}{A} off the cape's rail.
 
 The motors draw from \texttt{V\_BATT} directly through the H-bridges, not
 from the \SI{5}{V} rail. Their start-up and stall currents can still sag the

@@ -91,8 +91,8 @@ Bluetooth controller & Motors receive no commands; the \SI{0.5}{s} timeout
 \item[Chase, dry run.] \texttt{roslaunch bbai\_chase chase.launch}. Holding R2
   publishes only the preview topic; nothing moves.
 \item[Chase, armed.] \texttt{chase.launch dry\_run:=false}. Holding R2 (with
-  L1 released) lets the chase node drive toward the target. Waiting on
-  separate camera power (\S\ref{sec:powerbudget}).
+  L1 released) lets the chase node drive toward the target. Needs the
+  camera on its own power (\S\ref{sec:resettests}).
 \item[Autonomous exploration.] \texttt{\textasciitilde/bbai\_slam/explore\_house.sh}
   on the laptop, with \texttt{robot.launch} on the board. The robot maps on
   its own (\S\ref{sec:explore}); Ctrl-C stops it and saves the map.

@@ -172,9 +172,10 @@ SLAM (gmapping) & Improving & Parked drift fixed; lidar found mounted
    backward and its transform corrected (\S\ref{sec:slamdiag}). \\
 GPS fusion (EKF) & Built, untested & Needs an outdoor run with a fix. \\
 Autonomous exploration & Built, untested & Frontier exploration with move\_base (\S\ref{sec:explore}). \\
-OAK-D-Lite detection & Working & Resets the board under full load; waiting on
-   separate camera power. \\
-Chase controller & Dry run only & Waiting on camera power. \\
+OAK-D-Lite detection & Working & Stable on its own power through a USB-C hub
+   (\S\ref{sec:resettests}). \\
+Chase controller & Tested, wheels lifted & Tracks and turns the right way;
+   floor test to be logged (\S\ref{sec:chasetest}). \\
 \bottomrule
 \end{tabularx}
 \end{table}
