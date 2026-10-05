@@ -21,6 +21,25 @@ Board `debian@192.168.3.120` · Laptop `jason@192.168.3.147` · Master `http://1
 | `roslaunch bbai_chase chase.launch targets:="[dog, person]"` | Chase dog or person, dry run |
 | `roslaunch bbai_chase chase.launch dry_run:=false` | Chase drives the motors (hold R2) |
 
+### Autonomous mode (search, map, chase)
+| Command | What |
+|---|---|
+| `sudo systemctl start bbai-robot` / `stop` | Start / stop autonomous mode |
+| `sudo systemctl enable bbai-robot` / `disable` | Run it at boot / don't |
+| `journalctl -u bbai-robot -f` | Its log |
+| `~/chase_ws/src/bbai_autonomy/systemd/robot_start.sh autostart:=false` | Run by hand; waits for Options |
+| `rostopic echo /autonomy/state` | What it's doing |
+| `rostopic echo /autonomy/source` | Who drives: off, idle, teleop, chase, nav |
+| `rostopic pub -1 /autonomy/enable std_msgs/Bool false` | Pause (Options does the same) |
+| `rostopic pub -1 /chase/set_targets std_msgs/String "dog,kid"` | Change targets: dog, kid, adult, person |
+| `roslaunch bbai_chase chase.launch targets:="[kid]"` | Kid detection test, dry run (stop bbai-robot first) |
+| `sudo nano /etc/default/bbai-robot` | Boot options: `BBAI_ARGS="targets:=[dog,kid] autostart:=false"` |
+| `cp ~/bbai-robot/ros/bbai_chase/scripts/chase_node.py ~/chase_ws/src/bbai_chase/scripts/` | Setup: update chase |
+| `cp ~/bbai-robot/ros/bbai_chase/launch/chase.launch ~/chase_ws/src/bbai_chase/launch/` | Setup: update chase launch |
+| `ln -s ~/bbai-robot/ros/bbai_autonomy ~/chase_ws/src/` | Setup: add bbai_autonomy |
+| `cd ~/chase_ws && catkin_make -DPYTHON_EXECUTABLE=/usr/bin/python3` | Setup: build |
+| `sudo cp ~/chase_ws/src/bbai_autonomy/systemd/bbai-robot.service /etc/systemd/system/ && sudo systemctl daemon-reload` | Setup: install the boot service |
+
 ### Calibration and tests
 | Command | What |
 |---|---|
@@ -68,6 +87,22 @@ Board `debian@192.168.3.120` · Laptop `jason@192.168.3.147` · Master `http://1
 | `rostopic echo /odometry/global -n1` | Fused position |
 | `rviz -d ~/bbai_slam/slam.rviz` | RViz only |
 
+## Host: autonomous mode (server VM or laptop)
+| Command | What |
+|---|---|
+| `~/autonomy_ws/src/bbai_autonomy/systemd/host_autonomy.sh` | Run by hand: maps if no saved map, else patrols |
+| `sudo systemctl start bbai-host@jason` / `stop` | Start / stop it |
+| `sudo systemctl enable bbai-host@jason` | Run it at boot |
+| `journalctl -u bbai-host@jason -f` | Its log |
+| `rostopic pub -1 /autonomy/command std_msgs/String save` | Finish mapping now, save, patrol |
+| `rostopic pub -1 /autonomy/command std_msgs/String remap` | Forget the map, map again |
+| `rostopic pub -1 /autonomy/command std_msgs/String home` | Robot is at the mapping start spot |
+| `rostopic pub -1 /autonomy/command std_msgs/String global` | Robot lost: search the whole map |
+| `ls -l ~/bbai_slam/maps/` | Saved maps; house.yaml = current |
+| `mkdir -p ~/autonomy_ws/src && ln -s ~/bbai-robot/ros/bbai_autonomy ~/autonomy_ws/src/` | Setup: add bbai_autonomy |
+| `cd ~/autonomy_ws && source /opt/ros/noetic/setup.bash && catkin_make` | Setup: build |
+| `sudo cp ~/autonomy_ws/src/bbai_autonomy/systemd/bbai-host@.service /etc/systemd/system/ && sudo systemctl daemon-reload` | Setup: install the boot service |
+
 ## PC (Windows)
 | Command | What |
 |---|---|
@@ -88,3 +123,4 @@ Board `debian@192.168.3.120` · Laptop `jason@192.168.3.147` · Master `http://1
 | L1 + right stick | Turn (1.5 rad/s) |
 | L1 + R1 | Turbo |
 | R2 (hold, L1 released) | Chase the target; release = stop |
+| Options | Autonomous mode on / off |

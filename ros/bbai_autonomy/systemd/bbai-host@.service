@@ -1,0 +1,18 @@
+# Off-board host (laptop or Proxmox VM): SLAM + navigation + mission, started at boot for user %i.
+#   sudo cp bbai-host@.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#   sudo systemctl enable --now bbai-host@$USER
+[Unit]
+Description=bbai robot off-board SLAM, navigation and mission (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=%i
+ExecStart=/bin/bash -lc '$$HOME/autonomy_ws/src/bbai_autonomy/systemd/host_autonomy.sh'
+KillSignal=SIGINT
+TimeoutStopSec=30
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

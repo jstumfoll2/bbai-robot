@@ -2,20 +2,37 @@
 """Chase-the-dog node for the BeagleBone AI robot.
 
 Runs MobileNet-SSD spatial detection on the OAK-D-Lite (all inference on the
-camera's Myriad X) and, while the chase button is held on the PS4 controller,
-steers toward the best target and drives up to a follow distance.
+camera's Myriad X) and steers toward the best target, driving up to a follow distance.
+arm_mode "button" (default): it drives only while the chase button is held on the PS4
+controller. arm_mode "auto": it drives whenever a target is tracked; bbai_autonomy's
+cmd_mux remaps its output and decides whether chasing is allowed.
 
 Topics
   sub  /joy                   sensor_msgs/Joy (from bbai_teleop)
   sub  /imu/data_raw          sensor_msgs/Imu, bias-corrected gyro z (from bbai_base)
+  sub  /chase/set_targets     std_msgs/String, e.g. "dog" or "dog,kid": changes targets live
   pub  /chase/target          geometry_msgs/PointStamped, camera frame: x right, z forward (m)
   pub  /chase/status          std_msgs/String, e.g. "TRACK dog 92% 1.40m -8.2deg"
+  pub  /chase/active          std_msgs/Bool, true while a target is tracked well enough to chase
+  pub  /chase/targets         std_msgs/String (latched), the current target list
   pub  /cmd_vel               geometry_msgs/Twist, only while armed (dry_run:=false)
   pub  /chase/cmd_vel_preview geometry_msgs/Twist, what it would send (always)
 
+Targets
+  Any MobileNet-SSD label (dog, person, cat, ...) plus "kid" and "adult". The network has
+  no child class, so a person is sorted by how high the top of their head is above the
+  floor: camera_height + depth x tan(angle of the box top above the camera axis, plus
+  camera_pitch). Under kid_max_height (1.35 m) is a kid, over it an adult. The feet don't
+  need to be in view, which matters with the camera this low. When the box touches the
+  top of the frame the head is out of view: if even the frame top is above
+  kid_max_height there it is an adult, otherwise "person" (can't tell). Once a kid is
+  being tracked, "can't tell" views keep the track (a kid up close fills the frame).
+  "person" matches everyone.
+
 Safety
-  - Moves only while the chase button is held AND the teleop deadman (L1) is not.
-    Teleop always wins.
+  - In button mode it moves only while the chase button is held AND the teleop
+    deadman (L1) is not. In auto mode it moves while a target is tracked and L1 is
+    not held. Teleop always wins.
   - One zero Twist on release, on target loss (> lost_timeout), on joy timeout, on exit.
   - No reverse. Stops inside stop_distance. Speed capped by max_linear, turning by max_turn_cmd.
   - dry_run (default true) never publishes /cmd_vel. It only fills the preview topic.
@@ -47,7 +64,7 @@ import numpy  # noqa: F401
 import rospy
 from geometry_msgs.msg import PointStamped, Twist
 from sensor_msgs.msg import Imu, Joy
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 
 import depthai as dai
 
@@ -110,8 +127,9 @@ class Detector(threading.Thread):
         self.blob, self.fps, self.confidence = blob, fps, confidence
         self.keep_aspect = keep_aspect
         self.preview_hfov = None  # rad, horizontal field of view of the NN input
+        self.fy = None            # px, RGB focal length at 1080p (for person heights)
         self.lock = threading.Lock()
-        self.latest = []      # list of (label, conf, x_m, z_m, bbox_cx)
+        self.latest = []      # list of (label, conf, x_m, z_m, bbox_cx, ymin, ymax)
         self.stamp = 0.0      # monotonic time of latest message
         self.error = None
         self.stop_flag = False
@@ -168,7 +186,8 @@ class Detector(threading.Thread):
                         for d in msg.detections:
                             lab = LABELS[d.label] if d.label < len(LABELS) else str(d.label)
                             dets.append((lab, d.confidence, d.spatialCoordinates.x / 1000.0,
-                                         d.spatialCoordinates.z / 1000.0, (d.xmin + d.xmax) / 2.0))
+                                         d.spatialCoordinates.z / 1000.0, (d.xmin + d.xmax) / 2.0,
+                                         d.ymin, d.ymax))
                         with self.lock:
                             self.latest, self.stamp, self.error = dets, time.monotonic(), None
             except Exception as e:  # camera unplugged / XLink error: retry
@@ -181,6 +200,7 @@ class Detector(threading.Thread):
         try:
             k = dev.readCalibration().getCameraIntrinsics(dai.CameraBoardSocket.RGB, 1920, 1080)
             fx = float(k[0][0])
+            self.fy = float(k[1][1])
         except Exception as e:
             rospy.logwarn("No RGB intrinsics (%s); using rgb_hfov_deg", e)
             return None
@@ -199,7 +219,13 @@ class Chase(object):
     def __init__(self):
         gp = rospy.get_param
         self.dry_run = gp("~dry_run", True)
-        self.targets = gp("~targets", ["dog"])
+        self.arm_mode = gp("~arm_mode", "button")        # "button" or "auto"
+        self.targets = self.parse_targets(gp("~targets", ["dog"]))
+        self.kid_max_height = gp("~kid_max_height", 1.35)  # m, head height splitting kid/adult
+        self.camera_height = gp("~camera_height", 0.15)  # m, lens above the floor
+        self.camera_pitch = math.radians(gp("~camera_pitch_deg", 0.0))  # + = tilted up
+        self.edge_margin = gp("~edge_margin", 0.02)      # box top this close to the frame top = clipped
+        self.default_fy = gp("~rgb_fy_px", 1500.0)       # until the calibration is read
         self.button_chase = gp("~button_chase", 7)       # R2 (hid-sony js numbering)
         self.button_deadman = gp("~button_teleop", 4)    # L1, teleop owns it
         self.joy_timeout = gp("~joy_timeout", 0.5)
@@ -234,6 +260,10 @@ class Chase(object):
         self.preview_pub = rospy.Publisher("chase/cmd_vel_preview", Twist, queue_size=1)
         self.target_pub = rospy.Publisher("chase/target", PointStamped, queue_size=1)
         self.status_pub = rospy.Publisher("chase/status", String, queue_size=1)
+        self.active_pub = rospy.Publisher("chase/active", Bool, queue_size=1)
+        self.targets_pub = rospy.Publisher("chase/targets", String, queue_size=1, latch=True)
+        self.targets_pub.publish(",".join(self.targets))
+        rospy.Subscriber("chase/set_targets", String, self.on_set_targets, queue_size=1)
         rospy.Subscriber("joy", Joy, self.on_joy, queue_size=1)
         rospy.Subscriber(gp("~imu_topic", "imu/data_raw"), Imu, self.on_imu, queue_size=1)
 
@@ -243,7 +273,54 @@ class Chase(object):
         self.track = None          # smoothed (azimuth_rad, range_m or None, label, conf);
                                    # azimuth = bearing - gyro yaw, fixed in the room
         self.track_stamp = 0.0
+        self.track_height = None   # m, estimated height of a tracked person
         self.last_frame = 0.0
+
+    @staticmethod
+    def parse_targets(t):
+        if isinstance(t, str):
+            t = t.replace("[", "").replace("]", "").split(",")
+        return [str(x).strip().lower() for x in t if str(x).strip()]
+
+    def on_set_targets(self, msg):
+        t = self.parse_targets(msg.data)
+        if not t:
+            rospy.logwarn("chase: empty target list ignored")
+            return
+        self.targets = t
+        self.hits = 0
+        self.targets_pub.publish(",".join(t))
+        rospy.loginfo("chase: targets now %s", t)
+
+    def height_at(self, z, y):
+        """Height above the floor (m) of image row y (0 top .. 1 bottom) at depth z."""
+        fy = self.det.fy or self.default_fy
+        # the preview is 1080 px tall in both crop modes (1080p sensor)
+        angle = math.atan((0.5 - y) * 1080.0 / fy) + self.camera_pitch
+        return self.camera_height + z * math.tan(angle)
+
+    def person_class(self, z, ymin):
+        """('kid' | 'adult' | 'person', head height in m or None) for a person box."""
+        if z <= 0.05:
+            return "person", None
+        if ymin < self.edge_margin:   # head above the frame: frame top is a lower bound
+            h = self.height_at(z, 0.0)
+            return ("adult" if h > self.kid_max_height else "person"), None
+        h = self.height_at(z, ymin)
+        return ("kid" if h < self.kid_max_height else "adult"), h
+
+    def matches(self, d):
+        """(label to report, height_m) if detection d is a target, else None."""
+        lab = d[0]
+        if lab != "person":
+            return (lab, None) if lab in self.targets else None
+        cls, h = self.person_class(d[3], d[5])
+        if "person" in self.targets or cls in self.targets:
+            return cls, h
+        if cls == "person" and "kid" in self.targets and self.hits > 0 \
+                and self.track is not None and self.track[2] == "kid":
+            return "kid", h  # can't see the head now, but we were following a kid
+        return None
 
     def on_joy(self, msg):
         self.buttons, self.joy_stamp = list(msg.buttons), time.monotonic()
@@ -277,6 +354,9 @@ class Chase(object):
 
     def armed(self):
         fresh = time.monotonic() - self.joy_stamp < self.joy_timeout
+        if self.arm_mode == "auto":
+            # no controller connected is fine; L1 held means teleop is driving
+            return not (fresh and self.held(self.button_deadman))
         return fresh and self.held(self.button_chase) and not self.held(self.button_deadman)
 
     def stop(self):
@@ -291,11 +371,15 @@ class Chase(object):
         if stamp == self.last_frame:
             return
         self.last_frame = stamp
-        cands = [d for d in dets if d[0] in self.targets]
+        cands = []
+        for d in dets:
+            m = self.matches(d)
+            if m is not None:
+                cands.append((m[0], d[1], d[2], d[3], d[4], m[1]))
         if not cands:
             self.hits = 0
             return
-        lab, conf, x, z, cx = max(cands, key=lambda d: d[1])
+        lab, conf, x, z, cx, self.track_height = max(cands, key=lambda d: d[1])
         yaw_capture = self.yaw_at(stamp - self.camera_latency)
         if z > 0.05:
             bearing, rng = math.atan2(x, z), math.hypot(x, z)
@@ -363,6 +447,7 @@ class Chase(object):
             else:
                 self.yaw_loop.reset()
 
+            self.active_pub.publish(cmd is not None)
             if cmd is not None:
                 self.preview_pub.publish(cmd)
             if armed and cmd is not None:
@@ -382,10 +467,13 @@ class Chase(object):
                     _, rng, lab, conf = self.track
                     b = self.bearing()
                     gyro = "%.2f" % self.gyro_z if self.gyro_z is not None else "?"
+                    if self.track_height is not None:
+                        lab += "(%.2fm tall)" % self.track_height
                     s = "TRACK %s %d%% %s %+.1fdeg v=%.2f w=%.2f->%.2f gyro=%s" % (
                         lab, conf * 100, "%.2fm" % rng if rng else "?m", math.degrees(b),
                         cmd.linear.x, w_ref, cmd.angular.z, gyro)
-                s += " | %s%s" % ("ARMED" if armed else "idle", " (dry run)" if self.dry_run else "")
+                s += " | %s%s%s" % ("ARMED" if armed else "idle", " auto" if self.arm_mode == "auto" else "",
+                                    " (dry run)" if self.dry_run else "")
                 self.status_pub.publish(s)
                 if self.log_status:
                     rospy.loginfo_throttle(2.0, s)
@@ -403,8 +491,9 @@ if __name__ == "__main__":
     rospy.init_node("chase")
     node = Chase()
     rospy.on_shutdown(node.shutdown)
-    rospy.loginfo("chase: targets=%s dry_run=%s (hold R2 to arm, L1 teleop overrides)",
-                  node.targets, node.dry_run)
+    rospy.loginfo("chase: targets=%s dry_run=%s arm_mode=%s (%s, L1 teleop overrides)",
+                  node.targets, node.dry_run, node.arm_mode,
+                  "drives whenever a target is tracked" if node.arm_mode == "auto" else "hold R2 to arm")
     try:
         node.spin()
     except rospy.ROSInterruptException:

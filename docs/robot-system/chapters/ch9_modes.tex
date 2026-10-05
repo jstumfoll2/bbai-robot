@@ -96,6 +96,9 @@ Bluetooth controller & Motors receive no commands; the \SI{0.5}{s} timeout
 \item[Autonomous exploration.] \texttt{\textasciitilde/bbai\_slam/explore\_house.sh}
   on the laptop, with \texttt{robot.launch} on the board. The robot maps on
   its own (\S\ref{sec:explore}); Ctrl-C stops it and saves the map.
+\item[Autonomous (search, map, chase).] The default at boot: maps the house
+  once, then patrols it on the saved map and chases a target on sight
+  (Chapter~\ref{ch:autonomy}). Options on the controller turns it on and off.
 \item[Calibration.] \texttt{rosrun bbai\_base mag\_calibrate.py} drives
   \topic{/cmd\_vel} itself to spin two turns. \texttt{motor\_map\_test.py}
   drives each motor in turn and must be run with \texttt{robot.launch}

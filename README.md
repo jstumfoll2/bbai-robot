@@ -10,7 +10,7 @@ and [docs/HANDOFF.md](docs/HANDOFF.md).
 | `devicetree/` | Robotics Cape device tree for the BB-AI (encoder pull-ups, UART6 Bluetooth, PRU motor pin) |
 | `pru/` | Notes for the PRU2_0 `gpio_rpmsg` firmware (source is in the librobotcontrol submodule) |
 | `librobotcontrol/` | Submodule: [jstumfoll2/librobotcontrol](https://github.com/jstumfoll2/librobotcontrol) `v1.1_AIfixes` |
-| `ros/` | Catkin packages for the board (ROS Melodic): `bbai_base`, `bbai_teleop`, `bbai_chase` |
+| `ros/` | Catkin packages for the board (ROS Melodic): `bbai_base`, `bbai_teleop`, `bbai_chase`, `bbai_autonomy` (also built on the host) |
 | `laptop/` | SLAM launch files and scripts for the Ubuntu/Noetic laptop |
 | `camera/` | OAK-D-Lite scripts for the board, and PC calibration tools plus the calibration backup |
 | `gps/` | libgps patch for the EM-506 on `/dev/ttyS2` |
@@ -26,6 +26,7 @@ On the board, each package lives in a catkin workspace (as of 2026-10-01):
 | `bbai_base` | `~/melodic-catkin-ws` | `roslaunch bbai_base robot.launch`: master, rplidar, `/odom`, `/imu/data_raw`, `/cmd_vel` motor control |
 | `bbai_teleop` | `~/teleop_ws` | `roslaunch bbai_teleop teleop.launch`: PS4 controller to `/cmd_vel` |
 | `bbai_chase` | `~/chase_ws` | `roslaunch bbai_chase chase.launch`: follows the dog with the OAK-D-Lite |
+| `bbai_autonomy` | `~/chase_ws` (board), `~/autonomy_ws` (host) | Autonomous mode at boot: map the house, search it, chase on sight. See [its README](ros/bbai_autonomy/README.md) |
 
 Build Python 3 workspaces with `catkin_make -DPYTHON_EXECUTABLE=/usr/bin/python3`. Start `robot.launch`
 first so it owns the master.

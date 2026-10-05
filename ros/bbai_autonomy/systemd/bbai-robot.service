@@ -1,0 +1,20 @@
+# Board: autonomous mode on boot.
+#   sudo cp bbai-robot.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#   sudo systemctl enable --now bbai-robot.service
+# Options: /etc/default/bbai-robot, e.g. BBAI_ARGS="targets:=[dog,kid] autostart:=false"
+[Unit]
+Description=BeagleBone AI robot: autonomous search, map and chase
+After=network-online.target bbai-bluetooth.service
+Wants=network-online.target bbai-bluetooth.service
+
+[Service]
+User=debian
+EnvironmentFile=-/etc/default/bbai-robot
+ExecStart=/home/debian/chase_ws/src/bbai_autonomy/systemd/robot_start.sh
+KillSignal=SIGINT
+TimeoutStopSec=20
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

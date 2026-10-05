@@ -1,0 +1,56 @@
+<!-- Autonomous mode, off-board host side (laptop or Proxmox VM, ROS Noetic).
+     Needs board.launch running on the robot and ROS_MASTER_URI pointing at it (~/bbai_slam/env.sh).
+     mode:=explore  gmapping + explore_lite map the house; the mission saves the map and exits.
+     mode:=patrol   map_server + AMCL on the saved map; the mission searches it room by room.
+     host_autonomy.sh picks the mode (saved map or not) and restarts this launch between them.
+     move_base publishes nav/cmd_vel; the board's cmd_mux decides whether it reaches the wheels. -->
+<launch>
+  <arg name="mode" default="explore"/>
+  <arg name="map_dir" default="$(env HOME)/bbai_slam/maps"/>
+  <arg name="map" default="$(arg map_dir)/house.yaml"/>
+  <arg name="slam_dir" default="$(env HOME)/bbai_slam"/>
+  <arg name="explore" value="$(eval mode == 'explore')"/>
+
+  <!-- explore: build the map -->
+  <include if="$(arg explore)" file="$(arg slam_dir)/gmapping_bbai.launch"/>
+  <node if="$(arg explore)" pkg="explore_lite" type="explore" name="explore" output="screen">
+    <param name="robot_base_frame" value="base_link"/>
+    <param name="costmap_topic" value="map"/>
+    <param name="costmap_updates_topic" value="map_updates"/>
+    <param name="visualize" value="true"/>
+    <param name="planner_frequency" value="0.33"/>
+    <param name="progress_timeout" value="30.0"/>
+    <param name="potential_scale" value="3.0"/>
+    <param name="orientation_scale" value="0.0"/>
+    <param name="gain_scale" value="1.0"/>
+    <param name="transform_tolerance" value="0.5"/>
+    <param name="min_frontier_size" value="0.4"/>
+  </node>
+
+  <!-- patrol: localize in the saved map -->
+  <node unless="$(arg explore)" pkg="map_server" type="map_server" name="map_server" args="$(arg map)"/>
+  <node unless="$(arg explore)" pkg="amcl" type="amcl" name="amcl" output="screen">
+    <rosparam file="$(find bbai_autonomy)/config/amcl.yaml" command="load"/>
+  </node>
+
+  <node pkg="move_base" type="move_base" name="move_base" output="screen">
+    <remap from="cmd_vel" to="nav/cmd_vel"/>
+    <rosparam file="$(arg slam_dir)/nav/move_base.yaml" command="load"/>
+    <rosparam file="$(arg slam_dir)/nav/costmap_common.yaml" command="load" ns="global_costmap"/>
+    <rosparam file="$(arg slam_dir)/nav/costmap_common.yaml" command="load" ns="local_costmap"/>
+    <rosparam file="$(arg slam_dir)/nav/global_costmap.yaml" command="load"/>
+    <rosparam file="$(arg slam_dir)/nav/local_costmap.yaml" command="load"/>
+    <rosparam file="$(arg slam_dir)/nav/dwa.yaml" command="load"/>
+  </node>
+
+  <!-- required: when the mission exits (map saved, or "remap"), the whole launch stops -->
+  <node pkg="bbai_autonomy" type="mission_node.py" name="mission" output="screen" required="true">
+    <param name="mode" value="$(arg mode)"/>
+    <param name="map_dir" value="$(arg map_dir)"/>
+    <param name="waypoint_spacing" value="1.5"/>
+    <param name="clearance" value="0.30"/>
+    <param name="look_around" value="true"/>
+    <param name="min_explore_time" value="120"/>
+    <param name="idle_timeout" value="60"/>
+  </node>
+</launch>

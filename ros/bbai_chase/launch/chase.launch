@@ -1,13 +1,23 @@
 <!-- Chase the dog: hold R2 on the PS4 controller to arm, release to stop; L1 (teleop) always overrides.
      Start robot.launch (bbai_base) and teleop.launch (bbai_teleop) first.
      dry_run:=true (default) only publishes /chase/cmd_vel_preview; pass dry_run:=false to drive.
-     targets:="[dog, person]" lets you test it by walking in front of the camera. -->
+     targets:="[dog, person]" lets you test it by walking in front of the camera.
+     targets can be dog, person, kid, adult (kid/adult are persons split by estimated height).
+     arm_mode:=auto drives whenever a target is tracked (used by bbai_autonomy, which
+     remaps cmd_vel to chase/cmd_vel so its mux decides). -->
 <launch>
   <arg name="dry_run" default="true"/>
   <arg name="targets" default="[dog]"/>
+  <arg name="arm_mode" default="button"/>
+  <arg name="cmd_vel" default="cmd_vel"/>
   <node pkg="bbai_chase" type="chase_node.py" name="chase" output="screen">
+    <remap from="cmd_vel" to="$(arg cmd_vel)"/>
     <param name="dry_run" value="$(arg dry_run)"/>
+    <param name="arm_mode" value="$(arg arm_mode)"/>
     <rosparam param="targets" subst_value="true">$(arg targets)</rosparam>
+    <param name="kid_max_height" value="1.35"/>     <!-- m; see /chase/status "(1.10m tall)" to tune -->
+    <param name="camera_height" value="0.15"/>      <!-- m, OAK lens above the floor: measure it -->
+    <param name="camera_pitch_deg" value="0.0"/>    <!-- + = tilted up -->
     <param name="button_chase" value="7"/>          <!-- R2 -->
     <param name="button_teleop" value="4"/>         <!-- L1, teleop deadman -->
     <param name="follow_distance" value="0.9"/>
