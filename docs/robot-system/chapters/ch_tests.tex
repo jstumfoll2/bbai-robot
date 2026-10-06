@@ -1,0 +1,170 @@
+\chapter{TEST LOG}
+\label{ch:tests}
+
+This chapter records the tests run on the robot, what was measured and what
+was concluded. The largest part is the investigation of the board resets
+that blocked the chase tests, which ended with the camera on its own power
+through a USB-C hub (\S\ref{sec:resettests}).
+
+\section{SUMMARY OF EARLIER TESTS}
+
+Table~\ref{tab:earliertests} lists the bring-up measurements that are
+described in their own chapters.
+
+\begin{table}[htbp]
+\centering
+\caption{Bring-up tests described elsewhere}
+\label{tab:earliertests}
+\small
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{38mm}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{18mm}}
+\toprule
+Test & Result & Section \\
+\midrule
+Encoder push, \SI{0.914}{m} (3 ft) & \SI{0.914}{m} measured after setting 15 counts per wheel turn & \S\ref{sec:odom} \\
+Motor map, wheels lifted & Motor numbering and signs found; about \SI{0.4}{m/s} at 30\% duty & \S\ref{sec:duty} \\
+Gyro drift, parked & \SI{1.6}{\degree/min} before the zero-velocity update, zero after & \S\ref{sec:zupt} \\
+Magnetometer, two-turn spin & Circle fit offsets; compass agrees with the gyro to 3\% & \S\ref{sec:mag} \\
+Lidar mount test & Zero bearing points to the rear; transform yaw set to \SI{180}{\degree} & \S\ref{sec:slamdiag} \\
+Turn rate on the floor & \SI{5.0}{rad/s} commanded gave \SI{1.31}{rad/s}; effective track \SI{0.46}{m} & \S\ref{sec:duty} \\
+Camera calibration & Epipolar error 0.36~px, baseline \SI{7.43}{cm} & \S\ref{sec:oakcal} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{CHASE, DRY RUN AND WHEELS OFF THE GROUND}
+\label{sec:chasetest}
+
+With the merged chase fix (\S\ref{sec:chaseyaw}) on the board and the camera
+on a USB Y-cable fed by a battery bank, chase was run with
+\texttt{targets:=[dog, person]} on 3 October 2026.
+
+\paragraph{Dry run.} Nothing was published to the motors. The node tracked
+both the dog (64--98\% confidence) and a person (61--99\%) at
+\SIrange{0.5}{2.4}{m}. The forward command fell to zero inside the
+\SI{0.9}{m} follow distance and reached about \SI{0.19}{m/s} at
+\SI{1.4}{m}, as \eqref{eq:chasev} predicts. Stepping to the robot's right
+gave a negative turn command, the correct sign, and bearings inside the
+\SI{5}{\degree} dead band gave none.
+
+\paragraph{Driving, wheels lifted.} With \texttt{dry\_run:=false} and R2 held,
+the node logged \texttt{Detector sees 39.2 deg horizontally (fx=1516 px at
+1080p, centre crop)}, confirming the preview crop of
+\S\ref{sec:previewcrop}. Turn requests of about \SI{0.3}{rad/s} were raised
+by the yaw-rate loop to between 0.7 and \SI{3.8}{rad/s}. This is the
+expected behaviour with the wheels in the air: the gyro sees no rotation,
+so the integrator keeps adding command until the limit. Releasing R2 returned the node to
+\texttt{idle}. A few minutes into this run the
+board reset, which started the investigation below.
+
+\section{BOARD RESET INVESTIGATION}
+\label{sec:resettests}
+
+\subsection{What had been ruled out}
+
+After the reset during the chase drive, the previous boot's journal and the
+serial console showed no kernel panic, no thermal shutdown message and no
+watchdog activity (the watchdogs were off). The CPU had been well below its
+\SI{85}{\degree C} critical trip point. So the reset was a hardware power
+event, not a software crash. The once-per-second battery logger used until
+then was too slow to show a transient, and it did not restart after a
+reboot.
+
+\subsection{Fast logger}
+\label{sec:fastlog}
+
+A new logger (\file{\textasciitilde/bin/fastlog.py} on the board) was written for
+the tests:
+\begin{itemize}
+\item It reads the battery pack and DC jack voltages from the cape's ADC in
+  a tight loop at about \SI{250}{Hz}, and writes the minimum, mean and
+  maximum of each channel for every \SI{50}{ms} window, so a dip shorter than
+  a second still shows.
+\item Every \SI{0.5}{s} it also logs every thermal zone (CPU, GPU, cores),
+  the CPU load and the CPU clock.
+\item A second process follows \texttt{dmesg -w} into its own file.
+\item Every line is flushed and \texttt{fsync}ed as it is written, so the
+  record survives a hard reset up to the last few milliseconds.
+\end{itemize}
+The \SI{5}{V} and \SI{3.3}{V} rails are not wired to any ADC channel on this
+board, so they could not be logged; a multimeter on SYS\_5V (P9.7/P9.8) is
+the only way to see them.
+
+\subsection{Isolation tests}
+
+Each test isolated one load. The results are in
+Table~\ref{tab:resettests}.
+\begin{description}
+\item[Test A, motors only.] With the wheels off the ground and the camera
+  not running, \topic{/cmd\_vel} was published at \SI{10}{Hz} in a repeating
+  pattern: \SI{15}{s} forward at full speed (the base caps the duty at 0.6),
+  \SI{15}{s} reverse, \SI{10}{s} spins at $\pm\SI{10}{rad/s}$, and abrupt
+  forward/reverse flips every second.
+\item[Test B, camera only, robot running.] \texttt{robot.launch} up (lidar,
+  base, IMU), no motor commands, and the full chase pipeline (stereo depth
+  plus detector) running in dry run.
+\item[Test B2, camera only, everything else off.] The robot launch file was
+  stopped, so no lidar, no motor driver and no ROS ran; only the camera
+  pipeline.
+\end{description}
+
+\begin{table}[htbp]
+\centering
+\caption{Board reset isolation tests (3 October 2026)}
+\label{tab:resettests}
+\small
+\begin{tabularx}{\linewidth}{lllX}
+\toprule
+Test & Camera & Motors and lidar & Result \\
+\midrule
+A & off & full duty, \SI{6.5}{min} & No reset. \\
+B & streaming & lidar on, motors idle & Reset \SI{17}{s} into camera streaming. \\
+B2 & streaming & all off & Reset at \SI{2}{min} \SI{13}{s}. \\
+Final & on USB-C hub with battery bank & all on & Stable. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\paragraph{Observations.}
+\begin{itemize}
+\item The pack and DC jack voltages were flat right up to the last
+  \SI{50}{ms} window before each reset: no dip on the cape's input.
+\item There were no USB errors and no kernel messages before the resets.
+\item The SoC ran at \SIrange{62}{70}{\degree C}, with the CPU throttled to
+  \SI{400}{MHz} throughout the camera runs. Hot, but a thermal shutdown would
+  have left a message.
+\item Whenever the motors ran, the battery pack reading fell to about
+  \SI{1.3}{V} and recovered when they stopped, while the DC jack held
+  \SI{8.8}{V}. That looks like the pack's protection circuit cutting out
+  under motor current while the supply on the DC jack carried the load.
+  It did not cause a reset, but on the battery alone the motors may not run
+  at full duty. \emph{Unconfirmed.}
+\end{itemize}
+
+\subsection{Conclusion}
+
+The camera is the trigger and the motors are not: the motors at full duty
+for six and a half minutes caused nothing, and the camera alone reset the
+board with nothing else running. Since the cape's input stayed flat, the
+failure is downstream of it, on the \SI{5}{V} path that feeds the
+BeagleBone and its USB-A port. That agrees with the power budget
+(Table~\ref{tab:budget}): the board and the camera alone draw about
+\SIrange{1.6}{2.7}{A} from a \SI{2}{A} regulator, so the full load was never
+needed to exceed it. The earlier \SI{90}{s} camera-only run that passed
+(\S\ref{sec:power}) was simply too short; test B2 took over two minutes.
+
+The USB Y-cable did not fix it. Most Y-cables still connect the host's
+\SI{5}{V} line to the device, so the camera could keep drawing from the board
+whenever the bank's output was lower or switched off.
+
+\subsection{The fix}
+
+Jason moved the camera to a USB-C hub plugged into the BeagleBone's USB-C
+port, with the battery bank plugged into the hub's power input. The camera's
+current now comes from the bank through the hub instead of from the cape's
+\SI{5}{V} rail. With this arrangement the whole system, including the
+camera, has run stably. The USB-C port had not powered the camera in the
+first tests; through the powered hub it does.
+
+\influx{The current drawn from the bank, and whether the hub also feeds the
+BeagleBone through its USB-C port, have not been measured. A long run with
+chase driving on the floor, and a run on the robot's battery alone, are still to be logged.}

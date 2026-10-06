@@ -282,6 +282,9 @@ serial console narrowed the cause down:
 \end{itemize}
 The conclusion is that the cape's \SI{5}{V} rail, which feeds the BeagleBone
 and its USB port, drops out when the camera (\SIrange{1}{1.5}{A}), motors,
-lidar and Bluetooth all run together. The fix in progress is to power the
-camera from a separate battery bank through a USB splitter cable.
-The load estimate behind this is in \S\ref{sec:powerbudget}.
+lidar and Bluetooth all run together. The load estimate behind this is in
+\S\ref{sec:powerbudget}. Later tests with a fast logger
+(\S\ref{sec:resettests}) showed that the camera alone is enough to reset
+the board, given a couple of minutes. A USB Y-cable did not help; the fix
+was a USB-C hub on the BeagleBone's USB-C port with the battery bank on the
+hub's power input.
