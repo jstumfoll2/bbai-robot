@@ -4,4 +4,5 @@
 source ~/bbai_slam/env.sh
 roslaunch ~/bbai_slam/${1:-gmapping}_bbai.launch &
 sleep 5
-rviz -d ~/bbai_slam/slam.rviz
+# no screen (server VM over ssh): keep SLAM running and view it in Foxglove instead
+if [ -n "$DISPLAY" ]; then rviz -d ~/bbai_slam/slam.rviz; else wait; fi

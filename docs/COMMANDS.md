@@ -79,11 +79,22 @@ Board `debian@192.168.3.120` · Laptop `jason@192.168.3.147` · Master `http://1
 | `rostopic echo /odometry/global -n1` | Fused position |
 | `rviz -d ~/bbai_slam/slam.rviz` | RViz only |
 
+## Server VM (Proxmox, Ubuntu 20.04, ROS Noetic) · `jason@192.168.3.150`
+| Command | What |
+|---|---|
+| `source ~/bbai_slam/env.sh` | Point ROS at the board |
+| `~/bbai_slam/start_slam.sh` | gmapping SLAM, no RViz |
+| `~/bbai_slam/explore_house.sh` | Map the house; Ctrl-C saves the map |
+| `roslaunch foxglove_bridge foxglove_bridge.launch port:=8765` | Viewer link for Foxglove |
+| `tmux new -s slam` / `tmux a -t slam` | Keep runs going after SSH closes / reattach |
+
 ## PC (Windows)
 | Command | What |
 |---|---|
 | `ssh debian@192.168.3.120` | Board shell |
 | `ssh jason@192.168.3.147` | Laptop shell |
+| `ssh jason@192.168.3.150` | Server VM shell |
+| Foxglove → `ws://192.168.3.150:8765` | View map, scan, plan |
 | http://192.168.3.120:3000 | Cloud9 IDE on the board |
 | PuTTY COM3, 115200 | Board serial console |
 | `cd "%USERPROFILE%\OneDrive\Robot 2.0\Camera\calibration"` | OAK calibration folder |
