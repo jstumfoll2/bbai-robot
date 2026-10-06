@@ -20,6 +20,7 @@ Board `debian@192.168.3.120` · Laptop `jason@192.168.3.147` · Master `http://1
 | `roslaunch bbai_chase chase.launch` | Dog chase, dry run (preview only) |
 | `roslaunch bbai_chase chase.launch targets:="[dog, person]"` | Chase dog or person, dry run |
 | `roslaunch bbai_chase chase.launch dry_run:=false` | Chase drives the motors (hold R2) |
+| `roslaunch bbai_chase chase.launch dry_run:=false targets:="[dog, person]"` | Chase dog or person, drives (hold R2) |
 
 ### Calibration and tests
 | Command | What |
@@ -28,6 +29,8 @@ Board `debian@192.168.3.120` · Laptop `jason@192.168.3.147` · Master `http://1
 | `nano ~/melodic-catkin-ws/src/bbai_base/config/base.yaml` | Paste the printed mag lines, restart robot.launch |
 | `rosrun bbai_base motor_map_test.py` | Motor→wheel map (wheels lifted, robot.launch stopped) |
 | `python3 ~/dog_detect.py 60` | Dog/person detection for 60 s (no ROS) |
+| `timeout 400 python3 ~/dog_detect.py 360` | Camera soak test, 6 min |
+| `lsusb \| grep 03e7` | Camera seen on USB? |
 | `python3 ~/oak_test.py 15` | OAK RGB + depth stream test |
 | `python3 ~/oak_calcheck.py` | Read OAK calibration (read-only) |
 
