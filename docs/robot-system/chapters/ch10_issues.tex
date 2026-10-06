@@ -4,9 +4,10 @@
 \section{OPEN ISSUES}
 
 \begin{description}
-\item[Board resets under full load.] The cape's \SI{5}{V} rail drops out with
+\item[Board resets under full load (fixed).] The cape's \SI{5}{V} rail drops out with
   the camera, motors, lidar and Bluetooth all running (\S\ref{sec:powerbudget}).
-  Waiting on a USB splitter and battery bank to power the camera separately.
+  Fixed by powering the camera through a USB-C hub from a battery bank
+  (\S\ref{sec:resettests}).
 \item[SLAM loses track while driving.] Analysis in \S\ref{sec:slamdiag}. The
   parked drift is fixed, and the lidar was found mounted backward; its
   transform now has a \SI{180}{\degree} yaw. Longer mapping runs are still to be tested.

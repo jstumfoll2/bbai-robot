@@ -20,6 +20,7 @@ Board `debian@192.168.3.120` · Laptop `jason@192.168.3.147` · Master `http://1
 | `roslaunch bbai_chase chase.launch` | Dog chase, dry run (preview only) |
 | `roslaunch bbai_chase chase.launch targets:="[dog, person]"` | Chase dog or person, dry run |
 | `roslaunch bbai_chase chase.launch dry_run:=false` | Chase drives the motors (hold R2) |
+| `roslaunch bbai_chase chase.launch dry_run:=false targets:="[dog, person]"` | Chase dog or person, drives (hold R2) |
 
 ### Autonomous mode (search, map, chase)
 | Command | What |
@@ -47,8 +48,16 @@ Board `debian@192.168.3.120` · Laptop `jason@192.168.3.147` · Master `http://1
 | `nano ~/melodic-catkin-ws/src/bbai_base/config/base.yaml` | Paste the printed mag lines, restart robot.launch |
 | `rosrun bbai_base motor_map_test.py` | Motor→wheel map (wheels lifted, robot.launch stopped) |
 | `python3 ~/dog_detect.py 60` | Dog/person detection for 60 s (no ROS) |
+| `timeout 400 python3 ~/dog_detect.py 360` | Camera soak test, 6 min |
+| `lsusb \| grep 03e7` | Camera seen on USB? |
 | `python3 ~/oak_test.py 15` | OAK RGB + depth stream test |
 | `python3 ~/oak_calcheck.py` | Read OAK calibration (read-only) |
+| `lsusb \| grep 03e7` | Camera seen on USB? |
+| `timeout 400 python3 ~/dog_detect.py 360` | Camera soak test, 6 min |
+| `nohup bash ~/bin/test_b2_camera_only.sh testC 6 &` | Camera-only reset test, 6 min (stops robot.launch; new name each run) |
+| `cat ~/fastlog/testC_events.log` | Test result: "done" = survived, only "start" = reset |
+| `python3 ~/bin/fastlog_summary.py ~/fastlog/testC.csv` | Voltages and temps, incl. last 2 s before a reset |
+| `rosrun bbai_base lidar_mount_test.py` | Lidar direction check: turns 90°, drives 0.3 m |
 
 ### Bluetooth / PS4
 | Command | What |
@@ -81,11 +90,22 @@ Board `debian@192.168.3.120` · Laptop `jason@192.168.3.147` · Master `http://1
 | `source ~/bbai_slam/env.sh` | Point ROS at the board |
 | `~/bbai_slam/start_slam.sh` | gmapping SLAM + RViz (default) |
 | `~/bbai_slam/start_slam.sh hector` | hector SLAM (lidar only) |
+| `~/bbai_slam/start_slam.sh lidar_only` | hector, no wheel odometry |
+| `~/bbai_slam/explore_house.sh` | Map the house on its own; Ctrl-C saves to ~/bbai_slam/maps/ |
 | `~/bbai_slam/reset_map.sh` | Wipe map, restart from current spot |
 | `rosrun map_server map_saver -f ~/bbai_slam/<name>` | Save map (.pgm + .yaml) |
 | `roslaunch ~/bbai_slam/gps_fusion.launch` | GPS + odom + IMU EKF → /odometry/global |
 | `rostopic echo /odometry/global -n1` | Fused position |
 | `rviz -d ~/bbai_slam/slam.rviz` | RViz only |
+
+## Server VM (Proxmox, Ubuntu 20.04, ROS Noetic) · `jason@192.168.3.150`
+| Command | What |
+|---|---|
+| `source ~/bbai_slam/env.sh` | Point ROS at the board |
+| `~/bbai_slam/start_slam.sh` | gmapping SLAM, no RViz |
+| `~/bbai_slam/explore_house.sh` | Map the house; Ctrl-C saves the map |
+| `roslaunch foxglove_bridge foxglove_bridge.launch port:=8765` | Viewer link for Foxglove |
+| `tmux new -s slam` / `tmux a -t slam` | Keep runs going after SSH closes / reattach |
 
 ## Host: autonomous mode (server VM or laptop)
 | Command | What |
@@ -108,6 +128,8 @@ Board `debian@192.168.3.120` · Laptop `jason@192.168.3.147` · Master `http://1
 |---|---|
 | `ssh debian@192.168.3.120` | Board shell |
 | `ssh jason@192.168.3.147` | Laptop shell |
+| `ssh jason@192.168.3.150` | Server VM shell |
+| Foxglove → `ws://192.168.3.150:8765` | View map, scan, plan |
 | http://192.168.3.120:3000 | Cloud9 IDE on the board |
 | PuTTY COM3, 115200 | Board serial console |
 | `cd "%USERPROFILE%\OneDrive\Robot 2.0\Camera\calibration"` | OAK calibration folder |
