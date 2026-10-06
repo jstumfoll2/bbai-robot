@@ -1,0 +1,31 @@
+<!-- Autonomous mode, board side: everything the robot runs on its own at boot.
+     bringup (lidar, motors, odom, IMU) + PS4 teleop + chase in auto mode + cmd_mux.
+     The off-board host (laptop or Proxmox VM) runs host.launch for SLAM, move_base and the mission.
+     dry_run:=true: chase never moves the wheels (move_base still can, via the mux; autostart:=false stops that).
+     autostart:=false boots with autonomy off; Options on the PS4 controller toggles it.
+     targets: any of dog, kid, person, adult. Change it live:
+       rostopic pub -1 /chase/set_targets std_msgs/String "dog,kid" -->
+<launch>
+  <arg name="dry_run" default="false"/>
+  <arg name="autostart" default="true"/>
+  <arg name="targets" default="[dog]"/>
+  <arg name="gps" default="false"/>
+
+  <include file="$(find bbai_base)/launch/robot.launch">
+    <arg name="gps" value="$(arg gps)"/>
+  </include>
+  <include file="$(find bbai_teleop)/launch/teleop.launch"/>
+
+  <include file="$(find bbai_chase)/launch/chase.launch">
+    <arg name="dry_run" value="$(arg dry_run)"/>
+    <arg name="targets" value="$(arg targets)"/>
+    <arg name="arm_mode" value="auto"/>
+    <arg name="cmd_vel" value="chase/cmd_vel"/>
+  </include>
+
+  <node pkg="bbai_autonomy" type="cmd_mux.py" name="cmd_mux" output="screen" respawn="true">
+    <param name="autostart" value="$(arg autostart)"/>
+    <param name="button_teleop" value="4"/>   <!-- L1 -->
+    <param name="button_toggle" value="9"/>   <!-- Options -->
+  </node>
+</launch>

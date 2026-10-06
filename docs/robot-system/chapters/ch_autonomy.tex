@@ -1,0 +1,186 @@
+\chapter{AUTONOMOUS MODE: SEARCH, MAP AND CHASE}
+\label{ch:autonomy}
+
+The goal of the project is a robot that, once switched on, finds the dog (or
+the kids) on its own and chases her. Autonomous mode puts the pieces of the
+previous chapters together: lidar mapping and exploration
+(\S\ref{sec:explore}), localization in a saved map, and the chase controller
+of Chapter~\ref{ch:chase}. It is the robot's default behaviour at boot.
+The code is the \texttt{bbai\_autonomy} package
+(\file{ros/bbai\_autonomy/}).
+
+\section{BEHAVIOUR}
+\label{sec:autobehave}
+
+\begin{description}
+\item[Explore] (first run, no saved map). gmapping builds the map and
+  explore\_lite drives frontier to frontier, exactly as in
+  \S\ref{sec:explore}. When explore\_lite has sent no new goal for
+  \SI{60}{s} (and at least \SI{120}{s} have passed), the house is mapped.
+  The mission saves it as \file{maps/house\_<date>.\{pgm,yaml\}}, points
+  \file{maps/house.yaml} at it and restarts the host side in patrol mode.
+  A partial map is also saved every \SI{2}{min} in case the power fails.
+\item[Patrol] (every run after that). map\_server loads
+  \file{house.yaml} and AMCL localizes the robot in it. The mission spreads
+  search points over the map (\S\ref{sec:waypoints}), visits them nearest
+  first, and at each one turns twice by \SI{120}{\degree} so the camera's
+  \SI{39}{\degree} view sweeps the whole room. When every point has been
+  visited it starts the next round, in the opposite order, forever.
+\item[Chase] (any time). The chase node runs in \emph{auto} arm mode: it
+  drives toward a target whenever it holds a track, without R2. While
+  \topic{/chase/active} is true the mission cancels its patrol goal; once
+  the target has been gone for \SI{3}{s} it re-sends the same goal. During
+  exploration move\_base simply keeps planning in the background and
+  continues after the chase.
+\end{description}
+
+\section{ARCHITECTURE}
+\label{sec:autoarch}
+
+The work is split by where it has to run. Anything that touches the motors or
+the camera stays on the board; anything heavy runs on an off-board
+\emph{host}, which is either the Proxmox server VM or the laptop. The host is
+whatever machine sources \file{\textasciitilde/bbai\_slam/env.sh}; nothing in
+the package names one.
+
+\begin{table}[ht]
+\centering\small
+\caption{Autonomous-mode nodes.}
+\label{tab:autonodes}
+\begin{tabularx}{\linewidth}{@{}lXl@{}}
+\toprule
+Machine & Nodes & Started by \\
+\midrule
+Board (Melodic) & \texttt{robot.launch}, PS4 teleop, \texttt{chase} (auto),
+  \texttt{cmd\_mux} & \texttt{bbai-robot.service} \\
+Host (Noetic) & gmapping + explore\_lite \emph{or} map\_server + AMCL;
+  move\_base; \texttt{mission} & \texttt{bbai-host@<user>.service} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\paragraph{Who drives.} Three sources want \topic{/cmd\_vel}. Rather than let
+them fight (the problem noted for exploration in \S\ref{sec:explore}), each
+publishes to its own topic and \texttt{cmd\_mux} on the board forwards one of
+them, in strict priority:
+\begin{enumerate}[nosep]
+\item PS4 teleop while L1 is held (the mux goes silent; teleop publishes
+  \topic{/cmd\_vel} itself);
+\item chase, while \topic{/chase/cmd\_vel} is fresher than \SI{0.4}{s};
+\item navigation, \topic{/nav/cmd\_vel} from move\_base, fresher than
+  \SI{0.6}{s}.
+\end{enumerate}
+Nothing passes while autonomy is disabled. The Options button toggles it,
+as does \topic{/autonomy/enable}. Each hand-over to nobody sends one zero
+twist.
+
+\paragraph{Failure behaviour.} If the host crashes or the Wi-Fi drops,
+\topic{/nav/cmd\_vel} stops and the base node's \SI{0.5}{s} timeout halts the
+motors. The board still teleops and still chases, because chase never depended
+on the host. When the board reboots it starts a new roscore; the host script
+watches the master's \texttt{run\_id} and restarts its side, so the two
+re-pair without anyone logging in.
+
+\section{TARGETS AND THE KID CLASS}
+\label{sec:kids}
+
+Targets are chosen at launch (\texttt{targets:=[dog,kid]}) or live with
+\topic{/chase/set\_targets}. Any MobileNet-SSD label works
+(\S\ref{sec:mobilenet}), plus \texttt{kid} and \texttt{adult}.
+
+MobileNet-SSD has a \emph{person} class but no child class, so a person is
+sorted by the height of the top of their head above the floor. With the box's
+top edge at normalized image row $y_{\min}$ (0 at the top), depth $Z$ from the
+spatial detector, RGB focal length $f_y$ at \SI{1080}{p}, camera height $h_c$
+and upward pitch $\theta_c$,
+\begin{equation}\label{eq:headheight}
+h_{\mathrm{head}} = h_c + Z\,\tan\!\Big(\arctan\frac{(0.5-y_{\min})\,1080}{f_y}+\theta_c\Big).
+\end{equation}
+A person with $h_{\mathrm{head}}<\SI{1.35}{m}$ is a kid, otherwise an adult.
+Only the top of the box is used, so the feet need not be in view. That matters
+with the camera this low: with $h_c\approx\SI{0.15}{m}$ and a vertical field of
+view near \SI{40}{\degree}, a \SI{1.1}{m} child fits in the frame head to toe
+only beyond about \SI{2.6}{m}.
+
+If the box touches the top of the frame the head is out of view, and
+\eqref{eq:headheight} at $y_{\min}=0$ is only a lower bound. Above
+\SI{1.35}{m} that still proves an adult; below it the node can't tell and does
+not start a chase. Once it is already following a kid, such views keep the
+track, since a kid up close always fills the frame. The status line prints the
+estimate (\texttt{kid(1.12m tall)}) so $h_c$, $\theta_c$ and the threshold can
+be tuned with real people in view. The low camera works in our favour here:
+an adult's head is usually out of frame and above the threshold at the frame
+top, while a child's head is in view from a couple of metres away.
+
+\section{SAVED MAP OR A FRESH MAP EACH TIME}
+\label{sec:savedmap}
+
+The robot maps once and localizes after that. A fresh map each run was
+rejected for three reasons:
+\begin{itemize}[nosep]
+\item AMCL on a fixed map is lighter and steadier than gmapping, and a long
+  chase around one room cannot smear the map.
+\item A finished map gives search points over every room. Frontier
+  exploration stops as soon as no frontiers are left, which is exactly when a
+  search needs to continue.
+\item Mapping with the RPLIDAR A1 is slow and sometimes fails
+  (Chapter~\ref{ch:slam}). Doing it once and checking the result beats
+  redoing it on every boot.
+\end{itemize}
+The cost is that AMCL needs a starting guess. The mission writes the robot's
+pose to \file{maps/last\_pose.yaml} every \SI{5}{s} and uses it at the next
+start, so a robot switched off where it stopped resumes correctly. If it was
+carried elsewhere, the command \texttt{home} declares it at the map origin
+(where mapping began) and \texttt{global} spreads AMCL's particles over the
+whole map. If the furniture moves, \texttt{remap} forgets the map and the
+next run explores again.
+
+AMCL uses the likelihood-field laser model with 90 of the 360 beams, 300 to
+2000 particles (cheap on the host), an update every \SI{0.1}{m} or
+\SI{0.2}{rad}, and a raised rotation noise ($\alpha_1=0.2$) for the skid
+steer's slip when turning.
+
+\section{SEARCH POINTS}
+\label{sec:waypoints}
+
+From the occupancy grid $M$ with resolution $r=\SI{0.05}{m}$:
+\begin{enumerate}[nosep]
+\item Mark cells free when $0\le M<25$; unknown and occupied cells are not.
+\item Erode the free set by $k=\lceil 0.30/r\rceil$ cells (8-connected), so
+  every remaining cell is at least \SI{0.30}{m} from a wall or unknown space.
+\item Flood-fill from the cell nearest the robot. Only reachable cells count,
+  which drops closed rooms and space seen through doorways that are too
+  narrow.
+\item Cut the map into $\SI{1.5}{m}\times\SI{1.5}{m}$ blocks and keep, in
+  each block that has a reachable cell, the one nearest the block centre.
+\item Order the points as a nearest-neighbour tour from the robot.
+\end{enumerate}
+A goal that fails or takes longer than \SI{90}{s} is skipped; the next round
+tries it again.
+
+\section{RUNNING IT}
+
+\begin{description}
+\item[By hand.] Board:
+  \texttt{robot\_start.sh autostart:=false}. Host:
+  \texttt{host\_autonomy.sh}. Press Options to start and again to stop.
+\item[At boot.] Enable \texttt{bbai-robot.service} on the board and
+  \texttt{bbai-host@<user>} on the host. Boot options go in
+  \file{/etc/default/bbai-robot}, for example
+  \texttt{BBAI\_ARGS="targets:=[dog,kid] autostart:=false"}; booting with
+  autonomy off and starting it with Options is the safer default until it has
+  run a few times.
+\item[Watching.] \topic{/autonomy/state} says what the mission is doing
+  (\texttt{PATROL round 2 point 5/14}) and \topic{/autonomy/source} who is
+  driving.
+\end{description}
+The exact commands are in \file{docs/COMMANDS.md}.
+
+\paragraph{Limits.} Everything listed for exploration in \S\ref{sec:explore}
+still applies, stairs above all. The chase controller has no obstacle
+avoidance of its own: it drives straight at the target through anything the
+camera does not report. Its speed cap (\SI{0.2}{m/s}) and stop distance
+(\SI{0.5}{m}) are the protection.
+\influx{Autonomous mode is written and unit-tested off the robot (mux
+priorities, kid classification, search points on a synthetic map). It has not
+yet run on the robot.}
